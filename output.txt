@@ -1,0 +1,11 @@
+
+> essential-dialer@0.1.0 dev
+> next dev
+
+▲ Next.js 16.3.2 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.1.2:3001
+- Environments: .env
+✓ Ready in 2.5s
+✓ Running next.config.mjs took 66ms
+[?25h

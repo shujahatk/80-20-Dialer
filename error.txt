@@ -1,0 +1,10 @@
+⚠ Port 3000 is in use by process 31672, using available port 3001 instead.
+⨯ Another next dev server is already running.
+
+- Local:        http://localhost:3000
+- PID:          31672
+- Dir:          C:\Users\Asus\Desktop\80-20-OUTBOUND-SYSTEM-main\80-20-OUTBOUND-SYSTEM-main\NewCode
+- Log:          .next\dev\logs\next-development.log
+
+You can access the existing server at http://localhost:3000,
+or run taskkill /PID 31672 /F to stop it and start a new one.

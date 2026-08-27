@@ -1,0 +1,63 @@
+
+C:\Users\Asus\Desktop\80-20-OUTBOUND-SYSTEM-main\80-20-OUTBOUND-SYSTEM-main\NewCode\app\dashboard\page.js
+  149:8  error  Parsing error: Identifier 'fetchAlertsAndOnline' has already been declared. (149:8)
+
+C:\Users\Asus\Desktop\80-20-OUTBOUND-SYSTEM-main\80-20-OUTBOUND-SYSTEM-main\NewCode\app\login\page.js
+  123:16  error  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+
+C:\Users\Asus\Desktop\80-20-OUTBOUND-SYSTEM-main\80-20-OUTBOUND-SYSTEM-main\NewCode\app\manager\blasts\[id]\progress\page.js
+  36:5  error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  34 |     if (!localUser || !token) { router.push('/login'); return; }
+  35 |     // User set via initial state; only fetch campaign
+> 36 |     fetchCampaign();
+     |     ^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  37 |   }, []);
+  38 |
+  39 |   const handleCancelCampaign = async () => {  react-hooks/set-state-in-effect
+  37:6  warning  React Hook useEffect has missing dependencies: 'fetchCampaign' and 'router'. Either include them or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               react-hooks/exhaustive-deps
+  74:5  error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  72 |     }, 3000);
+  73 |
+> 74 |     setPollInterval(interval);
+     |     ^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  75 |     return () => clearInterval(interval);
+  76 |   }, [id]);
+  77 |                                                                                                 react-hooks/set-state-in-effect
+
+C:\Users\Asus\Desktop\80-20-OUTBOUND-SYSTEM-main\80-20-OUTBOUND-SYSTEM-main\NewCode\app\manager\blasts\page.js
+  88:5  error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  86 |     }
+  87 |     // User set via initial state; only fetch leads and campaigns
+> 88 |     fetchLeads();
+     |     ^^^^^^^^^^ Avoid calling setState() directly within an effect
+  89 |     fetchCampaigns();
+  90 |   }, []);
+  91 |  react-hooks/set-state-in-effect
+  90:6  warning  React Hook useEffect has a missing dependency: 'router'. Either include it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        react-hooks/exhaustive-deps
+
+C:\Users\Asus\Desktop\80-20-OUTBOUND-SYSTEM-main\80-20-OUTBOUND-SYSTEM-main\NewCode\app\workstation\page.js
+  664:6  error  Parsing error: Expected corresponding JSX closing tag for <div>. (664:6)
+
+✖ 8 problems (6 errors, 2 warnings)
+

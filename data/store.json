@@ -1,0 +1,567 @@
+{
+  "users": [
+    {
+      "_id": "a7nlooejjmt47se4r",
+      "name": "abdullah",
+      "email": "abdullah@gmail.com",
+      "password": "$2b$10$SWiYb/Th6WD2aXAIPC8CAOn1WushnwGcRBkEQHAHJs3R1s/.DEmJK",
+      "role": "salesperson",
+      "approved": true,
+      "lastActive": "2026-08-22T10:10:36.287Z",
+      "lastLogin": "2026-08-22T10:10:14.337Z",
+      "createdAt": "2026-08-22T10:07:23.806Z"
+    },
+    {
+      "_id": "iim7fkex0mt3e4qyy",
+      "name": "user",
+      "email": "user@gmail.com",
+      "password": "$2b$10$CZO2wlCK7sPOBgmmFcXc8O20TspRGbXIJX.sPhabufTooXLEigZ26",
+      "role": "salesperson",
+      "approved": true,
+      "lastActive": "2026-08-26T15:56:16.345Z",
+      "lastLogin": "2026-08-26T15:49:48.944Z",
+      "createdAt": "2026-08-21T20:17:12.462Z"
+    },
+    {
+      "_id": "ho6s2wx6jmt3e3d6s",
+      "name": "shujahat",
+      "email": "shujahat@gmail.com",
+      "password": "$2b$10$ZRdhJZJPdGsf0dUyuV8KxugsRs4vUQETs9WBbxuiSNvqntgx0ELza",
+      "role": "owner",
+      "approved": true,
+      "lastActive": "2026-08-26T17:59:53.799Z",
+      "lastLogin": "2026-08-26T17:59:53.799Z",
+      "createdAt": "2026-08-21T20:16:07.883Z"
+    }
+  ],
+  "calls": [],
+  "messages": [
+    {
+      "_id": "1yk6tvt1dmt4xz0d1",
+      "userId": "iim7fkex0mt3e4qyy",
+      "leadId": "xqtdobpmwmt46vxjm",
+      "messageSid": "failed-email-1787437223316",
+      "from": "user <user@gmail.com>",
+      "to": "alice@designco.co",
+      "body": "Hi Alice Smith,\n\nI noticed your work at Design Co.\n\nI wanted to reach out to introduce our outbound sales solution and discuss how we can help support your growth.\n\nDo you have 10 minutes for a brief call later this week?\n\nBest regards",
+      "status": "failed",
+      "channel": "email",
+      "direction": "outbound",
+      "blastCampaignId": null,
+      "createdAt": "2026-08-22T22:20:23.317Z"
+    }
+  ],
+  "contacts": [],
+  "leads": [
+    {
+      "_id": "9wj0ugz8lmt471go8",
+      "contact": {
+        "name": "John Doe",
+        "position": "Sales Director",
+        "phone": "14155552671",
+        "email": "shujahatk17@gmail.com",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "Acme Corp",
+        "website": "https://acme.com",
+        "niche": "SaaS Outreach",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "San Francisco",
+        "region": "California",
+        "timezone": "America/Los_Angeles"
+      },
+      "assignment": {
+        "list": "Warm Contacts",
+        "priority": 90,
+        "dateAssigned": "2026-08-22T09:46:28.136Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:46:28.136Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "iim7fkex0mt3e4qyy",
+      "currentlyBeingWorkedAt": "2026-08-22T22:12:24.440Z"
+    },
+    {
+      "_id": "6ts0p40vxmt46vxjz",
+      "contact": {
+        "name": "abuzar Taylor",
+        "position": "CEO",
+        "phone": "+45145538601",
+        "email": "abuzarbabar53@gmail.com",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "EnergySolutions",
+        "website": "https://energysolutions.com",
+        "niche": "Renewable Energy",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "Dallas",
+        "region": "Texas",
+        "timezone": "America/Chicago"
+      },
+      "assignment": {
+        "list": "Inbound Leads",
+        "priority": 100,
+        "dateAssigned": "2026-08-22T09:42:10.078Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.079Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "ho6s2wx6jmt3e3d6s",
+      "currentlyBeingWorkedAt": "2026-08-26T15:56:37.247Z"
+    },
+    {
+      "_id": "mauufth0gmt46vxjx",
+      "contact": {
+        "name": "David Wilson",
+        "position": "VP Product",
+        "phone": "+16175556789",
+        "email": "david@healthedge.com",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "HealthEdge",
+        "website": "https://healthedge.com",
+        "niche": "Healthcare IT",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "Boston",
+        "region": "Massachusetts",
+        "timezone": "America/New_York"
+      },
+      "assignment": {
+        "list": "Warm Contacts",
+        "priority": 95,
+        "dateAssigned": "2026-08-22T09:42:10.076Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.077Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "iim7fkex0mt3e4qyy",
+      "currentlyBeingWorkedAt": "2026-08-22T22:12:14.335Z"
+    },
+    {
+      "_id": "i2lbj9abmmt46vxjv",
+      "contact": {
+        "name": "Emily Davis",
+        "position": "Operations Manager",
+        "phone": "+12065551234",
+        "email": "emily.davis@builders.org",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "Summit Builders",
+        "website": "https://builders.org",
+        "niche": "Construction",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "Seattle",
+        "region": "Washington",
+        "timezone": "America/Los_Angeles"
+      },
+      "assignment": {
+        "list": "Cold Outreach",
+        "priority": 65,
+        "dateAssigned": "2026-08-22T09:42:10.074Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.075Z"
+    },
+    {
+      "_id": "h32l3nszemt46vxjs",
+      "contact": {
+        "name": "Michael Brown",
+        "position": "Procurement Head",
+        "phone": "+1447700900077",
+        "email": "michael.brown@ukretail.co.uk",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "UK Retail Ltd",
+        "website": "https://ukretail.co.uk",
+        "niche": "E-commerce",
+        "notes": ""
+      },
+      "geography": {
+        "country": "UK",
+        "city": "London",
+        "region": "Greater London",
+        "timezone": "Europe/London"
+      },
+      "assignment": {
+        "list": "International Warm",
+        "priority": 75,
+        "dateAssigned": "2026-08-22T09:42:10.072Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.072Z"
+    },
+    {
+      "_id": "9h1h22dcimt46vxjq",
+      "contact": {
+        "name": "Sarah Miller",
+        "position": "Managing Director",
+        "phone": "+13035559021",
+        "email": "sarah@consultgroup.com",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "ConsultGroup",
+        "website": "https://consultgroup.com",
+        "niche": "Management Consulting",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "Denver",
+        "region": "Colorado",
+        "timezone": "America/Denver"
+      },
+      "assignment": {
+        "list": "Referrals",
+        "priority": 85,
+        "dateAssigned": "2026-08-22T09:42:10.070Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.070Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "ho6s2wx6jmt3e3d6s",
+      "currentlyBeingWorkedAt": "2026-08-22T23:04:46.946Z"
+    },
+    {
+      "_id": "2ecjzbwdcmt46vxjo",
+      "contact": {
+        "name": "Bob Johnson",
+        "position": "CTO",
+        "phone": "+13125553421",
+        "email": "bob.johnson@techcorp.io",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "TechCorp",
+        "website": "https://techcorp.io",
+        "niche": "Software development",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "Chicago",
+        "region": "Illinois",
+        "timezone": "America/Chicago"
+      },
+      "assignment": {
+        "list": "Cold Outreach",
+        "priority": 70,
+        "dateAssigned": "2026-08-22T09:42:10.068Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.068Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "iim7fkex0mt3e4qyy",
+      "currentlyBeingWorkedAt": "2026-08-22T22:12:49.079Z"
+    },
+    {
+      "_id": "xqtdobpmwmt46vxjm",
+      "contact": {
+        "name": "Alice Smith",
+        "position": "Creative Lead",
+        "phone": "+12125557890",
+        "email": "alice@designco.co",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "Design Co",
+        "website": "https://designco.co",
+        "niche": "Agency",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "New York",
+        "region": "New York",
+        "timezone": "America/New_York"
+      },
+      "assignment": {
+        "list": "Inbound Leads",
+        "priority": 80,
+        "dateAssigned": "2026-08-22T09:42:10.065Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.066Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "iim7fkex0mt3e4qyy",
+      "currentlyBeingWorkedAt": "2026-08-22T22:19:57.471Z"
+    },
+    {
+      "_id": "6iwkn3vfimt46vxjj",
+      "contact": {
+        "name": "John Doe",
+        "position": "Sales Director",
+        "phone": "+14155552671",
+        "email": "john.doe@acme.com",
+        "preferredChannel": ""
+      },
+      "company": {
+        "name": "Acme Corp",
+        "website": "https://acme.com",
+        "niche": "SaaS Outreach",
+        "notes": ""
+      },
+      "geography": {
+        "country": "USA",
+        "city": "San Francisco",
+        "region": "California",
+        "timezone": "America/Los_Angeles"
+      },
+      "assignment": {
+        "list": "Warm Contacts",
+        "priority": 90,
+        "dateAssigned": "2026-08-22T09:42:10.062Z"
+      },
+      "status": "new",
+      "nextAction": "call",
+      "userId": "iim7fkex0mt3e4qyy",
+      "campaignId": null,
+      "createdAt": "2026-08-22T09:42:10.063Z",
+      "currentlyBeingWorked": true,
+      "currentlyBeingWorkedBy": "iim7fkex0mt3e4qyy",
+      "currentlyBeingWorkedAt": "2026-08-22T22:20:53.780Z"
+    }
+  ],
+  "campaigns": [
+    {
+      "_id": "j58yl70l4mt4u0xz4",
+      "name": "blast",
+      "description": "",
+      "createdBy": "ho6s2wx6jmt3e3d6s",
+      "status": "active",
+      "totalLeads": 0,
+      "createdAt": "2026-08-22T20:29:55.072Z"
+    }
+  ],
+  "activityLogs": [
+    {
+      "_id": "7o0kefb2kmt4xz0d6",
+      "leadId": "xqtdobpmwmt46vxjm",
+      "userId": "iim7fkex0mt3e4qyy",
+      "action": "email",
+      "channel": "email",
+      "direction": "outbound",
+      "outcome": "failed",
+      "notes": "Subject: sell a product\n\nError: The gmail.com domain is not verified. Please, add and verify your domain on https://resend.com/domains",
+      "messageSid": "",
+      "timestamp": "2026-08-22T22:20:23.322Z"
+    }
+  ],
+  "emailTemplates": [],
+  "loginSessions": [
+    {
+      "_id": "8ymuqswummt3e607v",
+      "userId": "iim7fkex0mt3e4qyy",
+      "date": "2026-08-21",
+      "activeTimeSeconds": 163,
+      "dialingTimeSeconds": 0,
+      "breakTimeSeconds": 0,
+      "isOnBreak": false,
+      "loginAt": "2026-08-21T20:18:11.227Z",
+      "lastActivityAt": "2026-08-21T20:21:50.603Z"
+    },
+    {
+      "_id": "f9yipfchmmt3eax69",
+      "userId": "ho6s2wx6jmt3e3d6s",
+      "date": "2026-08-21",
+      "loginAt": "2026-08-21T20:22:00.561Z",
+      "lastActivityAt": "2026-08-21T20:25:22.690Z",
+      "activeTimeSeconds": 145
+    },
+    {
+      "_id": "012x56z0amt46dinm",
+      "userId": "ho6s2wx6jmt3e3d6s",
+      "date": "2026-08-22",
+      "loginAt": "2026-08-22T09:27:50.962Z",
+      "lastActivityAt": "2026-08-22T23:17:15.411Z",
+      "activeTimeSeconds": 1947
+    },
+    {
+      "_id": "fi81f6ueemt46q1lx",
+      "userId": "iim7fkex0mt3e4qyy",
+      "date": "2026-08-22",
+      "activeTimeSeconds": 2984,
+      "dialingTimeSeconds": 0,
+      "breakTimeSeconds": 0,
+      "isOnBreak": false,
+      "loginAt": "2026-08-22T09:37:35.397Z",
+      "lastActivityAt": "2026-08-22T22:23:29.104Z"
+    },
+    {
+      "_id": "te1xb5w5zmt47tysu",
+      "userId": "a7nlooejjmt47se4r",
+      "date": "2026-08-22",
+      "activeTimeSeconds": 60,
+      "dialingTimeSeconds": 0,
+      "breakTimeSeconds": 0,
+      "isOnBreak": false,
+      "loginAt": "2026-08-22T10:08:37.998Z",
+      "lastActivityAt": "2026-08-22T10:10:36.279Z"
+    },
+    {
+      "_id": "d0lfs5pyjmt52doq9",
+      "userId": "ho6s2wx6jmt3e3d6s",
+      "date": "2026-08-23",
+      "loginAt": "2026-08-23T00:23:46.553Z",
+      "lastActivityAt": "2026-08-23T14:52:55.731Z",
+      "activeTimeSeconds": 1589
+    },
+    {
+      "_id": "gq3ixepr0mta7oe5d",
+      "userId": "iim7fkex0mt3e4qyy",
+      "date": "2026-08-26",
+      "activeTimeSeconds": 407,
+      "dialingTimeSeconds": 0,
+      "breakTimeSeconds": 0,
+      "isOnBreak": false,
+      "loginAt": "2026-08-26T14:50:55.009Z",
+      "lastActivityAt": "2026-08-26T15:56:16.343Z"
+    },
+    {
+      "_id": "7y8t6z7ilmta7pco2",
+      "userId": "ho6s2wx6jmt3e3d6s",
+      "date": "2026-08-26",
+      "loginAt": "2026-08-26T14:51:39.746Z",
+      "lastActivityAt": "2026-08-26T17:59:40.329Z",
+      "activeTimeSeconds": 1821
+    }
+  ],
+  "sendingInboxes": [],
+  "emailSequences": [],
+  "whatsappTemplates": [
+    {
+      "_id": "wa-tpl-intro",
+      "name": "Quick Intro & Availability",
+      "category": "intro",
+      "body": "Hi {{first_name}}, this is {{sender_name}} regarding {{company}}. Wanted to see if you have a quick minute this week to connect? Here is my calendar if easier: {{booking_link}}",
+      "mergeFields": [
+        "first_name",
+        "sender_name",
+        "company",
+        "booking_link"
+      ],
+      "createdAt": "2026-08-21T20:14:58.323Z"
+    },
+    {
+      "_id": "wa-tpl-followup",
+      "name": "Call Follow-up & Booking Link",
+      "category": "followup",
+      "body": "Hi {{first_name}}, tried giving you a quick call earlier. Whenever you have 5 minutes, feel free to pick a time that works best for you here: {{booking_link}}",
+      "mergeFields": [
+        "first_name",
+        "booking_link"
+      ],
+      "createdAt": "2026-08-21T20:14:58.323Z"
+    }
+  ],
+  "systemConfigs": [
+    {
+      "_id": "0ncb5e5dmmt3e406v",
+      "key": "main_config",
+      "callRecordingEnabled": false,
+      "allowedHoursStart": 8,
+      "allowedHoursEnd": 23,
+      "crmWebhookUrl": "",
+      "updatedAt": "2026-08-22T09:47:29.879Z"
+    }
+  ],
+  "blastCampaigns": [
+    {
+      "_id": "grfd54bonmt4y5yo9",
+      "name": "Test campaign",
+      "type": "email",
+      "createdBy": "ho6s2wx6jmt3e3d6s",
+      "templateSubject": "Selling a product",
+      "templateBody": "hiii",
+      "useAiPersonalization": false,
+      "leadIds": [
+        "9wj0ugz8lmt471go8",
+        "6ts0p40vxmt46vxjz",
+        "mauufth0gmt46vxjx",
+        "i2lbj9abmmt46vxjv",
+        "h32l3nszemt46vxjs",
+        "9h1h22dcimt46vxjq",
+        "2ecjzbwdcmt46vxjo",
+        "xqtdobpmwmt46vxjm",
+        "6iwkn3vfimt46vxjj"
+      ],
+      "status": "queued",
+      "stats": {
+        "total": 9,
+        "sent": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      "createdAt": "2026-08-22T22:25:47.721Z"
+    },
+    {
+      "_id": "xhjd6qnkymt4x6g0c",
+      "name": "abc",
+      "type": "email",
+      "createdBy": "ho6s2wx6jmt3e3d6s",
+      "templateSubject": "abc",
+      "templateBody": "hi abc",
+      "leadIds": [
+        "9wj0ugz8lmt471go8",
+        "6ts0p40vxmt46vxjz",
+        "mauufth0gmt46vxjx",
+        "i2lbj9abmmt46vxjv",
+        "h32l3nszemt46vxjs",
+        "9h1h22dcimt46vxjq",
+        "2ecjzbwdcmt46vxjo",
+        "xqtdobpmwmt46vxjm",
+        "6iwkn3vfimt46vxjj"
+      ],
+      "status": "queued",
+      "stats": {
+        "total": 9,
+        "sent": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      "createdAt": "2026-08-22T21:58:10.572Z"
+    }
+  ],
+  "leadAssignments": []
+}
