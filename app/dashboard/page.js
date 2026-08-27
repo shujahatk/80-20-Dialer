@@ -85,42 +85,38 @@ export default function Dashboard() {
   const fetchAllData = async () => {
     setStatsLoading(true);
     try {
-      await fetchAlertsAndOnline();
+      const [
+        metricsRes,
+        usersRes,
+        boardRes,
+        configRes,
+        leadsRes,
+        campRes,
+        alertsRes,
+        onlineRes
+      ] = await Promise.all([
+        apiRequest('/api/manager/metrics').catch(() => ({ success: false })),
+        apiRequest('/api/manager/users').catch(() => ({ success: false })),
+        apiRequest('/api/manager/leaderboard').catch(() => ({ success: false })),
+        apiRequest('/api/manager/config').catch(() => ({ success: false })),
+        apiRequest('/api/leads').catch(() => ({ success: false })),
+        apiRequest('/api/manager/blasts').catch(() => ({ success: false })),
+        apiRequest('/api/manager/alerts').catch(() => ({ success: false })),
+        apiRequest('/api/session/online').catch(() => ({ success: false }))
+      ]);
 
-      // Fetch Metrics
-      const metricsRes = await apiRequest('/api/manager/metrics').catch(() => ({ success: false }));
-      if (metricsRes.success && metricsRes.data) {
-        setMetrics(metricsRes.data);
-      }
+      if (metricsRes.success && metricsRes.data) setMetrics(metricsRes.data);
+      if (usersRes.success && usersRes.data) setRegisteredUsers(usersRes.data);
+      if (boardRes.success && boardRes.data) setTeamLeaderboard(boardRes.data);
+      if (configRes.success && configRes.data) setSettings(configRes.data);
+      if (leadsRes.success && leadsRes.data) setLeads(leadsRes.data);
+      if (campRes.success && campRes.data) setCampaigns(campRes.data);
+      if (alertsRes.success && alertsRes.data) setAlerts(alertsRes.data);
+      if (onlineRes.success && onlineRes.data) setOnlineUsers(onlineRes.data);
 
-      // Fetch Inboxes
       setInboxes([
         { _id: 'default', name: 'Default Outbound Identity', fromEmail: 'onboarding@resend.dev', fromName: '80/20 Outbound', dailyLimit: 500, sentToday: 12, status: 'active', domainStatus: 'verified' }
       ]);
-
-      // Fetch Users & Leaderboard
-      const usersRes = await apiRequest('/api/manager/users').catch(() => ({ success: false }));
-      if (usersRes.success && usersRes.data) {
-        setRegisteredUsers(usersRes.data);
-      }
-
-      const boardRes = await apiRequest('/api/manager/leaderboard').catch(() => ({ success: false }));
-      if (boardRes.success && boardRes.data) {
-        setTeamLeaderboard(boardRes.data);
-      }
-
-      // Fetch Config
-      const configRes = await apiRequest('/api/manager/config').catch(() => ({ success: false }));
-      if (configRes.success && configRes.data) setSettings(configRes.data);
-
-      // Fetch Leads
-      const leadsRes = await apiRequest('/api/leads').catch(() => ({ success: false }));
-      if (leadsRes.success && leadsRes.data) setLeads(leadsRes.data);
-
-      // Fetch Campaigns
-      const campRes = await apiRequest('/api/manager/blasts').catch(() => ({ success: false }));
-      if (campRes.success && campRes.data) setCampaigns(campRes.data);
-
     } catch (err) {
       console.error('Dashboard error loading data:', err);
     } finally {
