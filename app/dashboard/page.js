@@ -137,25 +137,29 @@ export default function Dashboard() {
 
   // Actions
   const handleApproveUser = async (userId) => {
+    // Instant optimistic update in local UI state
+    setRegisteredUsers(prev => prev.map(u => u._id === userId ? { ...u, approved: true } : u));
     try {
       const res = await apiRequest('/api/manager/users', 'PUT', { userId, action: 'approve' });
       if (res.success) fetchAllData();
-    } catch (err) { alert(err.message); }
+    } catch (err) { alert(err.message); fetchAllData(); }
   };
 
   const handleRoleChange = async (userId, role) => {
+    setRegisteredUsers(prev => prev.map(u => u._id === userId ? { ...u, role } : u));
     try {
       const res = await apiRequest('/api/manager/users', 'PUT', { userId, action: 'role', role });
       if (res.success) fetchAllData();
-    } catch (err) { alert(err.message); }
+    } catch (err) { alert(err.message); fetchAllData(); }
   };
 
   const handleRejectUser = async (userId) => {
     if (!confirm('Remove this user from the system?')) return;
+    setRegisteredUsers(prev => prev.filter(u => u._id !== userId));
     try {
       const res = await apiRequest(`/api/manager/users?userId=${userId}`, 'DELETE');
       if (res.success) fetchAllData();
-    } catch (err) { alert(err.message); }
+    } catch (err) { alert(err.message); fetchAllData(); }
   };
 
   const handleSaveSettings = async (e) => {
