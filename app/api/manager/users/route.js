@@ -25,6 +25,55 @@ export async function GET(req) {
   }
 }
 
+export async function POST(req) {
+  try {
+    const user = await verifyAuth(req);
+    if (!user || !['owner', 'manager', 'admin'].includes(user.role)) {
+      return NextResponse.json(
+        { success: false, message: 'Unauthorized access.' },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json();
+    const { name, email, password, role = 'salesperson' } = body;
+
+    if (!name || !email || !password) {
+      return NextResponse.json(
+        { success: false, message: 'Name, email, and password are required.' },
+        { status: 400 }
+      );
+    }
+
+    const existing = await UserStore.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      return NextResponse.json(
+        { success: false, message: 'User with this email already exists.' },
+        { status: 400 }
+      );
+    }
+
+    const newUser = await UserStore.create({
+      name,
+      email: email.toLowerCase(),
+      password,
+      role,
+      approved: true
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'User created successfully.',
+      data: newUser
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, message: err.message || 'Server error occurred.' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function PUT(req) {
   try {
     const user = await verifyAuth(req);

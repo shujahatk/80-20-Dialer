@@ -30,7 +30,7 @@ export async function POST(req) {
       );
     }
 
-    // Auto-approve first user as owner
+    // Auto-approve account creation so users can log in immediately
     const allUsers = await UserStore.findAllUsers();
     const isFirstUser = allUsers.length === 0;
 
@@ -39,7 +39,7 @@ export async function POST(req) {
       email: email.toLowerCase(),
       password,
       role: isFirstUser ? 'owner' : (role || 'salesperson'),
-      approved: isFirstUser
+      approved: true
     });
 
     return NextResponse.json(
@@ -47,7 +47,7 @@ export async function POST(req) {
         success: true,
         message: isFirstUser 
           ? 'First account created and approved as Owner.'
-          : 'Account created successfully. Please wait for manager approval.',
+          : 'Account created successfully. You may now log in.',
         data: {
           _id: user._id,
           name: user.name,
