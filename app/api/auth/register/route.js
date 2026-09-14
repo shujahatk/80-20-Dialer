@@ -1,9 +1,15 @@
 import { NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { UserStore } from '@/lib/store';
+import { checkRateLimit } from '@/lib/rateLimiter';
+import { logAuditEvent } from '@/lib/auditLogger';
 
 export async function POST(req) {
   try {
+    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
+    const rateCheck = checkRateLimit(`register_${ip}`, 5, 60000);
+    if (!rateCheck.success) return rateCheck.errorResponse;
+
     await connectDB();
     const body = await req.json();
     const { name, email, password, role } = body;
@@ -11,6 +17,16 @@ export async function POST(req) {
     if (!name || !email || !password) {
       return NextResponse.json(
         { success: false, message: 'Please provide name, email, and password.' },
+        { status: 400 }
+      );
+    }
+
+    // Validate enterprise password complexity
+    const { validatePasswordStrength } = await import('@/lib/auth/passwordValidator.js');
+    const pwdValidation = validatePasswordStrength(password);
+    if (!pwdValidation.valid) {
+      return NextResponse.json(
+        { success: false, message: pwdValidation.error },
         { status: 400 }
       );
     }
@@ -40,6 +56,14 @@ export async function POST(req) {
       password,
       role: isFirstUser ? 'owner' : (role || 'salesperson'),
       approved: isFirstUser
+    });
+
+    await logAuditEvent({
+      userId: user._id,
+      action: 'USER_REGISTERED',
+      entityType: 'auth',
+      notes: `New user account registered (${user.email}) as ${user.role}. Approved: ${user.approved}`,
+      req
     });
 
     return NextResponse.json(

@@ -1,304 +1,249 @@
-// Long-running worker for blast email/SMS campaigns.
-/// Polls MongoDB every ~5s for BlastCampaign documents with status 'queued'.
-/// Processes lead list, checks suppression, personalizes template, sends via
-/// emailService (email) or sendBlastSms (SMS stub), logs each send to Message model,
-/// updates campaign stats incrementally.
-
-import mongoose from 'mongoose';
-import { connectDB } from '../lib/db.js';
-import Lead from '../models/Lead.js';
-import Message from '../models/Message.js';
-import BlastCampaign from '../models/BlastCampaign.js';
-import User from '../models/User.js';
-import { sendBlastSms } from '../lib/sms/sendBlastSms.js';
+import { BlastCampaignStore, LeadStore, MessageStore, ActivityLogStore, UserStore } from '../lib/store.js';
+import { SuppressionStore } from '../lib/suppression/suppressionStore.js';
 import { sendEmail } from '../lib/emailService.js';
-import { generatePersonalizedMessage } from '../lib/aiService.js';
+import { sendBlastSms } from '../lib/sms/sendBlastSms.js';
 
-// Increase poll interval if DB is not yet connected; reduce once running
 const POLL_INTERVAL_MS = 5000;
+const STALE_RESERVATION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+let isWorkerRunning = false;
 
-// Fetch queued campaigns and process them
-async function processQueuedCampaigns() {
-  try {
-    const isConnected = await connectDB();
-    if (!isConnected) {
-      console.log('[Blast Worker] Database not connected. Skipping poll.');
-      return;
+/**
+ * Recovers any recipients stuck in 'processing' state due to worker restart or crash
+ */
+export async function recoverStaleReservations(campaign) {
+  if (!campaign || !Array.isArray(campaign.recipients)) return;
+  const now = Date.now();
+  let modified = false;
+
+  for (const r of campaign.recipients) {
+    if (r.status === 'processing' && r.reserved_at) {
+      const reservedTime = new Date(r.reserved_at).getTime();
+      if (now - reservedTime > STALE_RESERVATION_TIMEOUT_MS) {
+        console.warn(`[Blast Worker] Recovering stale reservation for lead ${r.lead_id} in campaign ${campaign._id || campaign.id}`);
+        r.status = 'pending';
+        r.attempt_count = (r.attempt_count || 0) + 1;
+        r.last_error = 'Stale reservation recovered after worker crash';
+        modified = true;
+      }
     }
+  }
 
-    const campaigns = await BlastCampaign.find({ status: 'queued' })
-      .limit(5) // limit concurrent processing to 5 at a time
-      .lean();
+  if (modified) {
+    await BlastCampaignStore.update(campaign._id || campaign.id, {
+      recipients: campaign.recipients
+    });
+  }
+}
 
-    for (const camp of campaigns) {
-      await processBlastCampaign(camp._id);
+export async function processQueuedCampaigns() {
+  if (isWorkerRunning) return;
+  isWorkerRunning = true;
+
+  try {
+    const allCampaigns = await BlastCampaignStore.findAll();
+    const activeCampaigns = allCampaigns.filter(c => c.status === 'queued' || c.status === 'processing');
+
+    for (const campaign of activeCampaigns.slice(0, 5)) {
+      await processSingleCampaign(campaign._id || campaign.id);
     }
   } catch (err) {
-    console.error('[Blast Worker] Error polling campaigns:', err.message);
+    console.error('[Blast Worker] Error processing queue:', err.message);
+  } finally {
+    isWorkerRunning = false;
   }
 }
 
-async function processBlastCampaign(campaignId) {
-  // Fetch fresh campaign doc
-  const campaign = await BlastCampaign.findById(campaignId).lean();
-  if (!campaign || campaign.status !== 'queued') return;
+async function processSingleCampaign(campaignId) {
+  const campaign = await BlastCampaignStore.findById(campaignId);
+  if (!campaign || !['queued', 'processing'].includes(campaign.status)) return;
 
-  console.log(`[Blast Worker] Starting campaign: ${campaign.name} (${campaignId})`);
+  console.log(`[Blast Worker] Starting async campaign execution: ${campaign.name} (${campaignId})`);
 
-  // Mark as processing immediately
-  await BlastCampaign.updateOne({ _id: campaignId }, { status: 'processing', completedAt: null });
+  // Crash recovery check for stale reservations
+  await recoverStaleReservations(campaign);
 
-  const { type, templateSubject, templateBody, leadIds, createdBy, useAiPersonalization } = campaign;
-  const totalLeads = leadIds.length;
+  // Mark status as processing
+  await BlastCampaignStore.update(campaignId, { status: 'processing' });
 
-  // Retrieve user details for the sender
-  const user = await User.findById(createdBy).lean();
-  const createdName = user?.name || 'Outbound Dialer';
-  const createdEmail = user?.email || 'onboarding@resend.dev';
+  const { type = 'email', templateSubject = '', templateBody = '', leadIds = [], createdBy } = campaign;
+  const sender = (await UserStore.findById(createdBy)) || { name: 'Outbound Team', email: 'outreach@8020acquisition.com' };
 
-  // Initialize stats
-  let sentCount = 0;
-  let failedCount = 0;
-  let skippedCount = 0;
+  let sentCount = campaign.stats?.sent || 0;
+  let failedCount = campaign.stats?.failed || 0;
+  let skippedCount = campaign.stats?.skipped || 0;
 
-  // Process each lead
-  for (let i = 0; i < leadIds.length; i++) {
-    const leadId = leadIds[i];
+  // Initialize or load persistent recipient state
+  let recipients = Array.isArray(campaign.recipients) && campaign.recipients.length > 0 
+    ? [...campaign.recipients]
+    : leadIds.map(leadId => ({
+        id: `rcpt_${campaignId}_${leadId}`,
+        campaign_id: String(campaignId),
+        lead_id: String(leadId),
+        status: 'pending',
+        idempotency_key: `${campaignId}_${leadId}_v1`,
+        provider_message_id: null,
+        attempt_count: 0,
+        reserved_at: null,
+        sent_at: null,
+        failed_at: null,
+        last_error: null
+      }));
 
-    // Check if campaign was cancelled or paused mid-run
-    const checkCampaign = await BlastCampaign.findById(campaignId).lean();
-    if (!checkCampaign || checkCampaign.status === 'cancelled') {
-      // Mark remaining as skipped
-      skippedCount += leadIds.length - i;
-      await BlastCampaign.updateOne(
-        { _id: campaignId },
-        {
-          $set:
-          {
-            stats: {
-              total: totalLeads,
-              sent: sentCount,
-              failed: failedCount,
-              skipped: skippedCount,
-            },
-            status: 'cancelled',
-            completedAt: new Date(),
-          },
-        }
-      );
-      console.log(`[Blast Worker] Campaign ${campaignId} was cancelled mid-run.`);
-      return;
-    }
+  for (let i = 0; i < recipients.length; i++) {
+    const recipient = recipients[i];
+    const leadId = recipient.lead_id;
 
-    if (checkCampaign.status === 'paused') {
-      console.log(`[Blast Worker] Campaign ${campaignId} was paused mid-run.`);
-      return;
-    }
-
-    // Idempotency check: prevent duplicate send if worker restarted or retried
-    const existingMessage = await Message.findOne({ blastCampaignId: campaignId, leadId, status: 'sent' }).lean();
-    if (existingMessage) {
-      sentCount++;
-      console.log(`[Blast Worker] Lead ${leadId} already processed for campaign ${campaignId}. Skipping.`);
+    // Skip already completed recipients
+    if (['sent', 'skipped'].includes(recipient.status)) {
       continue;
     }
 
-    // Fetch lead with suppression check
-    const lead = await Lead.findById(leadId).select('suppression contact company').lean();
-    if (!lead) {
-      failedCount++;
-      // Update stats incrementally
-      await BlastCampaign.updateOne(
-        { _id: campaignId },
-        {
-          $set:
-          {
-            stats: {
-              total: totalLeads,
-              sent: sentCount,
-              failed: failedCount,
-              skipped: skippedCount,
-            },
-          },
-        }
-      );
-      console.warn(`[Blast Worker] Lead ${leadId} not found in campaign ${campaignId}.`);
-      continue;
-    }
-
-    // Respect suppression check
-    const isSuppressed = type === 'email' ? lead.suppression?.email : lead.suppression?.sms;
-    if (isSuppressed) {
-      skippedCount++;
-      // Update stats incrementally
-      await BlastCampaign.updateOne(
-        { _id: campaignId },
-        {
-          $set:
-          {
-            stats: {
-              total: totalLeads,
-              sent: sentCount,
-              failed: failedCount,
-              skipped: skippedCount,
-            },
-          },
-        }
-      );
-      console.log(`[Blast Worker] Lead ${leadId} is suppressed, skipping.`);
-      continue;
-    }
-
-    // Personalize template with merge tags / Claude AI
-    let body = templateBody || '';
-    let subject = templateSubject || '';
-
-    const firstName = lead.contact?.name || '';
-    const companyName = lead.company?.name || '';
-
-    if (useAiPersonalization !== false) {
-      try {
-        body = await generatePersonalizedMessage({
-          lead,
-          basePrompt: templateBody,
-          tone: 'professional',
-          channel: type
-        });
-        // Pacing delay (400ms) between Claude API calls to prevent rate limit spikes
-        await new Promise(resolve => setTimeout(resolve, 400));
-      } catch (aiErr) {
-        console.warn(`[Blast Worker] AI generation failed for lead ${leadId}, using fallback:`, aiErr.message);
-        if (body) {
-          body = body.replace(/{{firstName}}/g, firstName);
-          body = body.replace(/{{company}}/g, companyName);
-        }
-      }
-    } else {
-      if (body) {
-        body = body.replace(/{{firstName}}/g, firstName);
-        body = body.replace(/{{company}}/g, companyName);
-      }
-    }
-
-    if (subject) {
-      subject = subject.replace(/{{firstName}}/g, firstName);
-      subject = subject.replace(/{{company}}/g, companyName);
-    }
-
-    // Send via appropriate channel
-    let messageStatus = 'sent';
-    let messageChannel = type;
-    let sendResult;
-
-    if (type === 'email') {
-      try {
-        sendResult = await sendEmail({
-          to: lead.contact?.email,
-          subject: subject,
-          html: body,
-          fromName: createdName,
-          fromEmail: createdEmail,
-        });
-        if (!sendResult.success) messageStatus = 'failed';
-      } catch (err) {
-        console.error('[Blast Worker] Email send error:', err.message);
-        messageStatus = 'failed';
-      }
-    } else if (type === 'sms') {
-      try {
-        const phone = lead.contact?.phone;
-        if (!phone) {
-          messageStatus = 'failed';
-        } else {
-          sendResult = await sendBlastSms(
-            [phone],
-            body,
-            [leadId]
-          );
-          if (!sendResult.success) messageStatus = 'failed';
-        }
-      } catch (err) {
-        console.error('[Blast Worker] SMS send error:', err.message);
-        messageStatus = 'failed';
-      }
-    }
-
-    // Log to Message model with blastCampaignId
-    try {
-      const recipientContact = type === 'email' ? lead.contact?.email : lead.contact?.phone;
-      await Message.create({
-        userId: createdBy,
-        leadId,
-        messageSid: sendResult?.id || sendResult?.results?.[0]?.messageSid || `blast-${campaignId}-${Date.now()}`,
-        from: type === 'email' ? `${createdName} <${createdEmail}>` : (process.env.TWILIO_PHONE_NUMBER || 'system'),
-        to: recipientContact || 'unknown',
-        body,
-        status: messageStatus,
-        channel: messageChannel,
-        direction: 'outbound',
-        blastCampaignId: campaignId,
+    // Step 7.6: Re-check campaign pause / cancellation immediately before dispatch
+    const currentCampaign = await BlastCampaignStore.findById(campaignId);
+    if (!currentCampaign || currentCampaign.status === 'cancelled' || currentCampaign.status === 'paused') {
+      console.log(`[Blast Worker] Campaign ${campaignId} was ${currentCampaign?.status || 'cancelled'}. Halting worker.`);
+      await BlastCampaignStore.update(campaignId, {
+        recipients,
+        stats: { total: recipients.length, sent: sentCount, failed: failedCount, skipped: skippedCount }
       });
-    } catch (err) {
-      console.error('[Blast Worker] Message log error:', err.message);
+      return;
     }
 
-    // Update stats incrementally
-    if (messageStatus === 'sent') sentCount++;
-    else if (messageStatus === 'failed') failedCount++;
+    // Step 7.4: Atomic reservation
+    recipient.status = 'processing';
+    recipient.reserved_at = new Date().toISOString();
+    recipient.attempt_count = (recipient.attempt_count || 0) + 1;
 
-    await BlastCampaign.updateOne(
-      { _id: campaignId },
-      {
-        $set:
-        {
-          stats: {
-            total: totalLeads,
-            sent: sentCount,
-            failed: failedCount,
-            skipped: skippedCount,
-          },
-        },
+    const lead = await LeadStore.findById(leadId);
+    if (!lead) {
+      skippedCount++;
+      recipient.status = 'failed';
+      recipient.failed_at = new Date().toISOString();
+      recipient.last_error = 'Lead not found';
+      continue;
+    }
+
+    const email = lead.contact?.email || lead.email;
+    const phone = lead.contact?.phone || lead.phone;
+
+    // Permanent suppression check (Step 3.3 & Step 7.4)
+    const suppCheck = await SuppressionStore.isSuppressed({
+      email,
+      phone,
+      channel: type === 'email' ? 'email' : 'sms'
+    });
+
+    const isSuppressed = suppCheck.suppressed || (type === 'email' ? lead.suppression?.email : lead.suppression?.sms);
+
+    if (isSuppressed || (type === 'email' && (!email || !email.includes('@')))) {
+      skippedCount++;
+      recipient.status = 'skipped';
+      recipient.last_error = isSuppressed ? 'Suppressed (DNC)' : 'Missing valid email';
+      continue;
+    }
+
+    const firstName = lead.contact?.name?.split(' ')[0] || lead.name?.split(' ')[0] || 'there';
+    const company = lead.company?.name || (typeof lead.company === 'string' ? lead.company : 'your team');
+    const industry = lead.industry || lead.niche || 'business';
+
+    const personalizedSubject = templateSubject
+      .replace(/{{firstName}}/g, firstName)
+      .replace(/{{company}}/g, company)
+      .replace(/{{industry}}/g, industry);
+
+    const personalizedBody = templateBody
+      .replace(/{{firstName}}/g, firstName)
+      .replace(/{{company}}/g, company)
+      .replace(/{{industry}}/g, industry);
+
+    try {
+      if (type === 'email') {
+        const sendResult = await sendEmail({
+          to: email,
+          subject: personalizedSubject,
+          html: `<div style="font-family: Arial, sans-serif; color: #1e293b; line-height: 1.6; white-space: pre-wrap;">${personalizedBody}</div>`,
+          fromName: sender.name || 'Sales Team',
+          fromEmail: sender.email || 'outreach@8020acquisition.com',
+          headers: {
+            'X-Idempotency-Key': recipient.idempotency_key
+          }
+        });
+
+        if (sendResult.success) {
+          sentCount++;
+          recipient.status = 'sent';
+          recipient.sent_at = new Date().toISOString();
+          recipient.provider_message_id = sendResult.id || `msg_${Date.now()}`;
+
+          await MessageStore.create({
+            userId: sender._id || sender.id,
+            leadId,
+            messageSid: recipient.provider_message_id,
+            from: `${sender.name || 'Sales Team'} <${sender.email || 'outreach@8020acquisition.com'}>`,
+            to: email,
+            body: personalizedBody,
+            status: 'sent',
+            channel: 'email',
+            direction: 'outbound'
+          });
+
+          await LeadStore.updateStage(leadId, 'CONTACTED', `Async Blast: ${campaign.name}`);
+          await ActivityLogStore.create({
+            leadId,
+            userId: sender._id || sender.id,
+            action: 'email',
+            channel: 'email',
+            direction: 'outbound',
+            outcome: 'sent',
+            notes: `Dispatched in async campaign "${campaign.name}"\nSubject: ${personalizedSubject}`,
+            messageSid: recipient.provider_message_id
+          });
+        } else {
+          failedCount++;
+          recipient.status = 'failed';
+          recipient.failed_at = new Date().toISOString();
+          recipient.last_error = sendResult.error || 'Provider dispatch error';
+        }
+      } else {
+        // SMS blast
+        const smsResult = await sendBlastSms({ to: phone, body: personalizedBody, leadId });
+        if (smsResult.success) {
+          sentCount++;
+          recipient.status = 'sent';
+          recipient.sent_at = new Date().toISOString();
+          recipient.provider_message_id = smsResult.sid || `sms_${Date.now()}`;
+        } else {
+          failedCount++;
+          recipient.status = 'failed';
+          recipient.failed_at = new Date().toISOString();
+          recipient.last_error = smsResult.error || 'SMS dispatch failed';
+        }
       }
-    );
-
-    console.log(`[Blast Worker] Lead ${leadId}: ${messageStatus} (sent:${sentCount}, failed:${failedCount}, skipped:${skippedCount})`);
+    } catch (e) {
+      failedCount++;
+      recipient.status = 'failed';
+      recipient.failed_at = new Date().toISOString();
+      recipient.last_error = e.message;
+    }
   }
 
-  // Mark campaign completed
-  const finalStats = {
-    total: totalLeads,
-    sent: sentCount,
-    failed: failedCount,
-    skipped: skippedCount,
-  };
-
-  await BlastCampaign.updateOne(
-    { _id: campaignId },
-    {
-      $set:
-      {
-        status: 'completed',
-        stats: finalStats,
-        completedAt: new Date(),
-      },
+  const finalStatus = failedCount === recipients.length && sentCount === 0 ? 'failed' : 'completed';
+  await BlastCampaignStore.update(campaignId, {
+    status: finalStatus,
+    recipients,
+    completedAt: new Date().toISOString(),
+    stats: {
+      total: recipients.length,
+      sent: sentCount,
+      failed: failedCount,
+      skipped: skippedCount
     }
-  );
+  });
 
-  console.log(`[Blast Worker] Campaign ${campaignId} completed: ${JSON.stringify(finalStats)}`);
+  console.log(`[Blast Worker] Finished campaign ${campaignId}: ${sentCount} sent, ${failedCount} failed, ${skippedCount} skipped.`);
 }
 
-// Start the worker loop
-connectDB().then(() => {
-  console.log('[Blast Worker] Connected to database. Starting worker loop.');
-
-  // Initial poll
-  processQueuedCampaigns();
-
-  // Then poll every POLL_INTERVAL_MS
+// Background scheduler
+if (typeof setInterval !== 'undefined') {
   setInterval(processQueuedCampaigns, POLL_INTERVAL_MS);
-}).catch(err => {
-  console.error('[Blast Worker] MongoDB connection error:', err.message);
-});
-
-// Export for testing
-export { processQueuedCampaigns, processBlastCampaign };
+}

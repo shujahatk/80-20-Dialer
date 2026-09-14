@@ -33,6 +33,15 @@ export async function POST(req) {
       );
     }
 
+    // IDOR check: Salespeople can only email leads assigned to them or unassigned
+    const { assertLeadAccess } = await import('@/lib/middleware/authGuard.js');
+    if (!assertLeadAccess(user, lead)) {
+      return NextResponse.json(
+        { success: false, message: 'Forbidden. You do not have permission to email this lead.' },
+        { status: 403 }
+      );
+    }
+
     // Respect suppression - if lead is opted out of email, skip
     if (lead.suppression?.email) {
       return NextResponse.json(
@@ -41,16 +50,66 @@ export async function POST(req) {
       );
     }
 
-    // Send email via Resend
+    // Check operational hours constraints
+    const { checkOperationalHours } = await import('@/lib/operationalHours.js');
+    const leadTimezone = lead.geography?.timezone || null;
+    const hoursCheck = await checkOperationalHours(leadTimezone);
+    if (!hoursCheck.allowed) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: hoursCheck.message,
+          operationalHours: hoursCheck
+        }, 
+        { status: 403 }
+      );
+    }
+
+    // Deliverability & Domain Throttle Guardrail (500 sends/domain/day)
+    const { checkDomainSendLimit, recordDomainSend, getComplianceHeaders } = await import('@/lib/email/deliverability.js');
+    const throttleCheck = checkDomainSendLimit(fromEmail || 'onboarding@resend.dev');
+    if (!throttleCheck.allowed) {
+      return NextResponse.json(
+        { success: false, message: throttleCheck.message, throttled: true, resetInHours: throttleCheck.resetInHours },
+        { status: 429 }
+      );
+    }
+
+    // Send email via Resend with RFC 8058 Compliance Headers
+    const recipientEmail = lead.contact?.email || lead.email;
+    if (!recipientEmail) {
+      return NextResponse.json(
+        { success: false, message: 'This lead does not have a valid email address.' },
+        { status: 400 }
+      );
+    }
+
     const apiKey = process.env.RESEND_API_KEY;
-    let sendResult = { success: false, id: null, error: null };
+    const defaultFrom = process.env.EMAIL_FROM || 'outreach@8020acquisition.com';
+    const defaultFromName = process.env.EMAIL_FROM_NAME || '80/20 Acquisition';
+    const configuredReplyTo = process.env.REPLY_TO || 'replies@8020acquisition.com';
+
+    // Check custom salesperson sending address (e.g. sammar@8020acquisition.com)
+    const allowedDomains = ['8020acquisition.com', '8020aquisition.com', 'resend.dev'];
+    const senderCandidate = fromEmail || user?.email || (user?.name ? `${user.name.toLowerCase()}@8020acquisition.com` : defaultFrom);
+    const candidateDomain = senderCandidate.includes('@') ? senderCandidate.split('@')[1].toLowerCase() : '';
+    const isCustomVerifiedDomain = allowedDomains.some(d => candidateDomain === d || candidateDomain.endsWith(`.${d}`)) ||
+      (defaultFrom.includes('@') && candidateDomain === defaultFrom.split('@')[1].toLowerCase());
+    
+    const effectiveFromEmail = isCustomVerifiedDomain ? senderCandidate.trim().toLowerCase() : defaultFrom;
+    const effectiveFromName = fromName ? fromName.trim() : (user?.name ? user.name.trim() : defaultFromName);
+    const replyTo = isCustomVerifiedDomain ? effectiveFromEmail : (fromEmail && fromEmail.includes('@') ? fromEmail : configuredReplyTo);
+
+    const complianceHeaders = getComplianceHeaders(recipientEmail);
+    let sendResult = { success: false };
 
     if (!apiKey) {
       // Mock send - log to Message anyway
+      recordDomainSend(effectiveFromEmail, 1);
       sendResult = { success: true, mock: true, id: `mock-email-${Date.now()}` };
     } else {
       try {
-        const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail || 'onboarding@resend.dev';
+        const from = `${effectiveFromName} <${effectiveFromEmail}>`;
         const response = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
@@ -59,9 +118,11 @@ export async function POST(req) {
           },
           body: JSON.stringify({
             from: from,
-            to: [lead.contact.email],
+            to: [recipientEmail],
+            reply_to: replyTo,
             subject: subject,
             html: emailBody,
+            headers: complianceHeaders
           }),
         });
 
@@ -69,6 +130,7 @@ export async function POST(req) {
         if (!response.ok) {
           throw new Error(data.message || `Resend API returned status ${response.status}`);
         }
+        recordDomainSend(effectiveFromEmail, 1);
         sendResult = { success: true, id: data.id };
       } catch (err) {
         console.error('[Resend] Send error:', err.message);
@@ -79,13 +141,15 @@ export async function POST(req) {
     // Log to Message model
     const messageStatus = sendResult.success ? 'sent' : 'failed';
     const messageSid = sendResult?.id || `failed-email-${Date.now()}`;
+    const targetLeadId = lead._id || lead.id;
+    const targetUserId = user._id || user.id;
 
     const messageRecord = await MessageStore.create({
-      userId: user._id,
-      leadId: lead._id,
+      userId: targetUserId,
+      leadId: targetLeadId,
       messageSid,
-      from: fromName ? `${fromName} <${fromEmail || 'onboarding@resend.dev'}>` : fromEmail || 'onboarding@resend.dev',
-      to: lead.contact.email,
+      from: `${effectiveFromName} <${effectiveFromEmail}>`,
+      to: recipientEmail,
       body: emailBody,
       status: messageStatus,
       channel: 'email',
@@ -93,14 +157,14 @@ export async function POST(req) {
     });
 
     if (sendResult.success) {
-      await LeadStore.update(leadId, {
+      await LeadStore.update(targetLeadId, {
         lastAction: `Email Sent: ${subject.substring(0, 80)}`,
         lastActionDate: new Date()
       });
 
       await ActivityLogStore.create({
-        leadId,
-        userId: user._id,
+        leadId: targetLeadId,
+        userId: targetUserId,
         action: 'email',
         channel: 'email',
         direction: 'outbound',
@@ -109,15 +173,19 @@ export async function POST(req) {
         messageSid: sendResult.id || ''
       });
 
-      // Enhanced logging
-      console.log(`[Email] Successfully sent email to lead ${lead._id}: messageSid=${messageSid}`);
+      // Auto-sync subscriber to Listmonk
+      try {
+        const { syncLeadToListmonk } = await import('@/lib/listmonk');
+        syncLeadToListmonk(lead).catch(() => {});
+      } catch (lmErr) {}
+
+      console.log(`[Email] Successfully sent email to lead ${targetLeadId}: messageSid=${messageSid}`);
     } else {
-      // Log failure with details
-      console.error(`[Email] Failed to send email to lead ${lead._id}: ${sendResult.error || 'Unknown error'}`);
+      console.error(`[Email] Failed to send email to lead ${targetLeadId}: ${sendResult.error || 'Unknown error'}`);
 
       await ActivityLogStore.create({
-        leadId,
-        userId: user._id,
+        leadId: targetLeadId,
+        userId: targetUserId,
         action: 'email',
         channel: 'email',
         direction: 'outbound',
@@ -125,13 +193,18 @@ export async function POST(req) {
         notes: `Subject: ${subject}\n\nError: ${sendResult.error || 'Send failed'}`,
         messageSid: ''
       });
+
+      return NextResponse.json(
+        { success: false, message: sendResult.error || 'Failed to dispatch email via Resend.', isSuppressed: false },
+        { status: 502 }
+      );
     }
 
     return NextResponse.json({
-      success: sendResult.success,
-      messageId: messageRecord._id,
+      success: true,
+      messageId: messageRecord._id || messageRecord.id,
       isSuppressed: false,
-      data: { leadId, subject, email: lead.contact.email, sendError: sendResult.error || null }
+      data: { leadId: targetLeadId, subject, email: recipientEmail, resendId: sendResult.id }
     });
   } catch (err) {
     return NextResponse.json(

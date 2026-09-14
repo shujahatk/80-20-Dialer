@@ -46,6 +46,21 @@ export async function POST(req) {
       }
     }
 
+    // Check operational hours constraints
+    const { checkOperationalHours } = await import('@/lib/operationalHours.js');
+    const leadTimezone = lead?.geography?.timezone || null;
+    const hoursCheck = await checkOperationalHours(leadTimezone);
+    if (!hoursCheck.allowed) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: hoursCheck.message,
+          operationalHours: hoursCheck
+        }, 
+        { status: 403 }
+      );
+    }
+
     const senderUser = await UserStore.findById(user._id);
     let closerUser = null;
     if (closerId) {

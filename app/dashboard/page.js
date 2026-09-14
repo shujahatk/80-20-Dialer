@@ -10,23 +10,15 @@ import MetricsKpiGrid from './components/MetricsKpiGrid';
 import OutboundActivityChart from './components/OutboundActivityChart';
 import ChannelDonutChart from './components/ChannelDonutChart';
 import AgentPresencePanel from './components/AgentPresencePanel';
-import SystemHealthMonitor from './components/SystemHealthMonitor';
+import BlastEngineSettingsCard from '@/components/BlastEngineSettingsCard';
+import { useRealtimePipeline } from '@/hooks/useRealtimePipeline';
 
 export default function Dashboard() {
   const router = useRouter();
+  const [isMounted, setIsMounted] = useState(false);
 
   // Auth User
-  const [user, setUser] = useState(() => {
-    if (typeof window === 'undefined') return null;
-    const localUser = localStorage.getItem('user');
-    const token = localStorage.getItem('token');
-    if (!localUser || !token) return null;
-    try {
-      return JSON.parse(localUser);
-    } catch {
-      return null;
-    }
-  });
+  const [user, setUser] = useState(null);
 
   // Active View Tab: 'overview' | 'leads' | 'inboxes' | 'approvals' | 'settings' | 'upload'
   const [activeTab, setActiveTab] = useState('overview');
@@ -62,23 +54,63 @@ export default function Dashboard() {
   const [uploadError, setUploadError] = useState('');
 
   useEffect(() => {
+    setIsMounted(true);
     const localUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
-    if (!localUser || !token) { router.push('/login'); return; }
-    const parsedUser = JSON.parse(localUser);
-    if (parsedUser.role === 'salesperson') { router.push('/workstation'); return; }
+    if (!localUser || !token) { 
+      router.push('/login'); 
+      return; 
+    }
+    try {
+      const parsedUser = JSON.parse(localUser);
+      if (parsedUser.role === 'salesperson') { 
+        router.push('/workstation'); 
+        return; 
+      }
+      setUser(parsedUser);
+    } catch {
+      router.push('/login');
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tabParam = urlParams.get('tab');
+      if (tabParam) setActiveTab(tabParam);
+    }
 
     fetchAllData();
-    const interval = setInterval(fetchAlertsAndOnline, 30000);
+    // High-speed real-time background sync (every 2.5s) for live KPIs, calls, and agent presence
+    const interval = setInterval(fetchSilentData, 2500);
     return () => clearInterval(interval);
   }, [router]);
 
-  const fetchAlertsAndOnline = async () => {
+  // Real-time Pipeline and Multi-tab Broadcast Subscription (0ms instant sync)
+  useRealtimePipeline(() => {
+    fetchSilentData();
+  });
+
+  const fetchSilentData = async () => {
     try {
-      const alertRes = await apiRequest('/api/manager/alerts');
-      if (alertRes.success) setAlerts(alertRes.data);
-      const onlineRes = await apiRequest('/api/session/online');
-      if (onlineRes.success) setOnlineUsers(onlineRes.data);
+      const [
+        metricsRes,
+        boardRes,
+        leadsRes,
+        alertsRes,
+        onlineRes
+      ] = await Promise.all([
+        apiRequest('/api/manager/metrics').catch(() => ({ success: false })),
+        apiRequest('/api/manager/leaderboard').catch(() => ({ success: false })),
+        apiRequest('/api/leads').catch(() => ({ success: false })),
+        apiRequest('/api/manager/alerts').catch(() => ({ success: false })),
+        apiRequest('/api/session/online').catch(() => ({ success: false }))
+      ]);
+
+      if (metricsRes.success && metricsRes.data) setMetrics(metricsRes.data);
+      if (boardRes.success && boardRes.data) setTeamLeaderboard(boardRes.data);
+      if (leadsRes.success && leadsRes.data) setLeads(leadsRes.data);
+      if (alertsRes.success && alertsRes.data) setAlerts(alertsRes.data);
+      if (onlineRes.success && onlineRes.data) setOnlineUsers(onlineRes.data);
     } catch (e) {}
   };
 
@@ -114,9 +146,34 @@ export default function Dashboard() {
       if (alertsRes.success && alertsRes.data) setAlerts(alertsRes.data);
       if (onlineRes.success && onlineRes.data) setOnlineUsers(onlineRes.data);
 
-      setInboxes([
-        { _id: 'default', name: 'Default Outbound Identity', fromEmail: 'onboarding@resend.dev', fromName: '80/20 Outbound', dailyLimit: 500, sentToday: 12, status: 'active', domainStatus: 'verified' }
-      ]);
+      const activeSalesUsers = (usersRes.success && Array.isArray(usersRes.data)) 
+        ? usersRes.data.filter(u => u.role === 'salesperson' && u.approved !== false) 
+        : [];
+
+      const initialInboxes = [
+        { 
+          _id: 'default', 
+          name: 'Primary Outbound Identity (Resend)', 
+          fromEmail: 'outreach@8020acquisition.com', 
+          fromName: '80/20 Acquisition', 
+          dailyLimit: 500, 
+          sentToday: metricsRes.data?.emailsSent || 0, 
+          status: 'active', 
+          domainStatus: 'verified' 
+        },
+        ...activeSalesUsers.map(u => ({
+          _id: String(u._id || u.id),
+          name: `${u.name} (Sales Identity)`,
+          fromEmail: u.email || `${u.name.toLowerCase()}@8020acquisition.com`,
+          fromName: `${u.name} | 80/20 Acquisition`,
+          dailyLimit: 100,
+          sentToday: 0,
+          status: 'active',
+          domainStatus: 'verified'
+        }))
+      ];
+
+      setInboxes(initialInboxes);
     } catch (err) {
       console.error('Dashboard error loading data:', err);
     } finally {
@@ -135,31 +192,30 @@ export default function Dashboard() {
     );
   }, [leads, searchQuery]);
 
-  // Actions
+  // 0ms Instant Optimistic Actions
   const handleApproveUser = async (userId) => {
-    // Instant optimistic update in local UI state
+    // Instant 0ms local state update
     setRegisteredUsers(prev => prev.map(u => u._id === userId ? { ...u, approved: true } : u));
     try {
-      const res = await apiRequest('/api/manager/users', 'PUT', { userId, action: 'approve' });
-      if (res.success) fetchAllData();
-    } catch (err) { alert(err.message); fetchAllData(); }
+      await apiRequest('/api/manager/users', 'PUT', { userId, action: 'approve' });
+    } catch (err) { alert(err.message || 'Approval failed'); }
   };
 
   const handleRoleChange = async (userId, role) => {
+    // Instant 0ms local state update
     setRegisteredUsers(prev => prev.map(u => u._id === userId ? { ...u, role } : u));
     try {
-      const res = await apiRequest('/api/manager/users', 'PUT', { userId, action: 'role', role });
-      if (res.success) fetchAllData();
-    } catch (err) { alert(err.message); fetchAllData(); }
+      await apiRequest('/api/manager/users', 'PUT', { userId, action: 'role', role });
+    } catch (err) { alert(err.message || 'Role update failed'); }
   };
 
   const handleRejectUser = async (userId) => {
     if (!confirm('Remove this user from the system?')) return;
+    // Instant 0ms local state update
     setRegisteredUsers(prev => prev.filter(u => u._id !== userId));
     try {
-      const res = await apiRequest(`/api/manager/users?userId=${userId}`, 'DELETE');
-      if (res.success) fetchAllData();
-    } catch (err) { alert(err.message); fetchAllData(); }
+      await apiRequest(`/api/manager/users?userId=${userId}`, 'DELETE');
+    } catch (err) { alert(err.message || 'Removal failed'); }
   };
 
   const handleSaveSettings = async (e) => {
@@ -179,6 +235,16 @@ export default function Dashboard() {
     }
   };
 
+  const handleReassignLead = async (leadId, newAssigneeId) => {
+    // Instant 0ms local state update
+    setLeads(prev => prev.map(l => (l._id === leadId || l.id === leadId) ? { ...l, assignedTo: newAssigneeId, assigned_to: newAssigneeId } : l));
+    try {
+      await apiRequest(`/api/leads/${leadId}`, 'PUT', { assignedTo: newAssigneeId || null });
+    } catch (err) {
+      alert(err.message || 'Failed to reassign lead.');
+    }
+  };
+
   const handleCsvUpload = async (e) => {
     e.preventDefault();
     if (!selectedFile) { setUploadError('Please choose a CSV file first.'); return; }
@@ -191,11 +257,24 @@ export default function Dashboard() {
       const res = await apiRequest('/api/leads/upload', 'POST', formData, true);
       if (res.success) {
         setUploadResult(res.data); setSelectedFile(null);
-        fetchAllData();
+        // Refresh leads list in background
+        const leadsRes = await apiRequest('/api/leads').catch(() => ({ success: false }));
+        if (leadsRes.success && leadsRes.data) setLeads(leadsRes.data);
       }
     } catch (err) { setUploadError(err.message || 'Import failed.'); }
     finally { setUploading(false); }
   };
+
+  if (!isMounted || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#07090e] text-slate-100 font-sans">
+        <div className="text-center space-y-4">
+          <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-slate-400 text-xs animate-pulse">Authenticating management console...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-[#07090e] text-slate-100 font-sans overflow-hidden">
@@ -279,14 +358,17 @@ export default function Dashboard() {
                         {teamLeaderboard.length === 0 ? (
                           <tr><td colSpan={7} className="p-4 text-center text-slate-500">No agent performance data available yet.</td></tr>
                         ) : (
-                          teamLeaderboard.slice(0, 5).map((agent, i) => (
+                          teamLeaderboard.map((agent, i) => (
                             <tr key={agent._id || i} className="hover:bg-white/[0.02]">
                               <td className="p-2.5 font-bold text-cyan-400">0{i + 1}</td>
                               <td className="p-2.5 font-medium text-white flex items-center gap-2">
                                 <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-slate-700 to-slate-600 flex items-center justify-center font-bold text-[10px] text-slate-200">
                                   {agent.name?.[0]?.toUpperCase() || 'A'}
                                 </div>
-                                <span>{agent.name}</span>
+                                <div>
+                                  <div className="font-semibold text-white">{agent.name}</div>
+                                  <div className="text-[10px] text-slate-500 font-mono">{agent.email}</div>
+                                </div>
                               </td>
                               <td className="p-2.5 text-center font-mono">{agent.callsToday}</td>
                               <td className="p-2.5 text-center font-mono text-emerald-400">{agent.connectedCalls}</td>
@@ -301,70 +383,15 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Live Agent Presence Panel */}
-                <div className="lg:col-span-1">
-                  <AgentPresencePanel onlineUsers={onlineUsers} leaderboard={teamLeaderboard} />
-                </div>
-              </div>
-
-              {/* Infrastructure Health Card */}
-              <SystemHealthMonitor />
-            </div>
-          )}
-
-          {/* TAB 2: ADMIN LEADS MANAGEMENT */}
-          {activeTab === 'leads' && (
-            <div className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/20">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-white">Leads Database & Routing</h2>
-                  <p className="text-xs text-slate-400">Manage, assign, and audit lead records across the organization.</p>
-                </div>
-                <button
-                  onClick={() => setActiveTab('upload')}
-                  className="bg-cyan-500 hover:bg-cyan-400 text-white font-semibold text-xs px-4 py-2 rounded-xl"
-                >
-                  + Upload Lead CSV
-                </button>
-              </div>
-
-              <div className="overflow-x-auto border border-white/10 rounded-xl">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-white/5 text-slate-400">
-                    <tr>
-                      <th className="p-3">Name</th>
-                      <th className="p-3">Company</th>
-                      <th className="p-3">Contact Details</th>
-                      <th className="p-3">Status</th>
-                      <th className="p-3">Assignee</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5 text-slate-300">
-                    {filteredLeads.length === 0 ? (
-                      <tr><td colSpan={5} className="p-4 text-center text-slate-500">No leads found matching query.</td></tr>
-                    ) : (
-                      filteredLeads.slice(0, 25).map(lead => (
-                        <tr key={lead._id} className="hover:bg-white/[0.02]">
-                          <td className="p-3 font-semibold text-white">{lead.contact?.name || lead.name || 'N/A'}</td>
-                          <td className="p-3">{lead.company?.name || lead.company || '—'}</td>
-                          <td className="p-3">{lead.contact?.email || lead.email || 'No email'}</td>
-                          <td className="p-3 capitalize">
-                            <span className="bg-white/5 border border-white/10 px-2 py-0.5 rounded-full text-[11px]">
-                              {lead.status || 'new'}
-                            </span>
-                          </td>
-                          <td className="p-3 text-slate-400">{lead.assignedTo?.name || 'Unassigned'}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+              {/* Live Agent Presence Panel */}
+              <div className="lg:col-span-1">
+                <AgentPresencePanel onlineUsers={onlineUsers} leaderboard={teamLeaderboard} />
               </div>
             </div>
-          )}
+          </div>
+        )}
 
           {/* TAB 3: TEAM ACCESS & APPROVALS */}
-          {activeTab === 'approvals' && (
             <div className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/20">
               <h2 className="text-lg font-bold text-white">Team Access & User Role Governance</h2>
 
@@ -395,7 +422,6 @@ export default function Dashboard() {
                             >
                               <option value="salesperson">Salesperson</option>
                               <option value="manager">Manager</option>
-                              <option value="admin">Admin</option>
                               <option value="owner">Owner</option>
                             </select>
                           </td>
@@ -429,110 +455,287 @@ export default function Dashboard() {
                 </table>
               </div>
             </div>
-          )}
 
           {/* TAB 4: OUTBOUND EMAIL SENDING INBOXES */}
           {activeTab === 'inboxes' && (
-            <div className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/20">
-              <h2 className="text-lg font-bold text-white">Outbound Sending Identities & Inboxes</h2>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {inboxes.map(inbox => (
-                  <div key={inbox._id} className="bg-[#07090e] p-4 rounded-xl border border-white/5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-white text-sm">{inbox.name}</div>
-                        <div className="text-xs text-slate-400">{inbox.fromEmail}</div>
-                      </div>
-                      <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full">
-                        {inbox.domainStatus || 'Verified'}
-                      </span>
+            <div className="space-y-6">
+              {/* Monthly Global Capacity Pool Banner (50,000 Total Allocation) */}
+              <div className="bg-gradient-to-r from-[#121624] via-[#161c2e] to-[#121624] border border-cyan-500/20 rounded-2xl p-6 shadow-xl shadow-cyan-500/5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/8 pb-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+                      <h2 className="text-base font-bold text-white tracking-tight">
+                        Resend Outbound Monthly Pool &amp; Capacity
+                      </h2>
                     </div>
-
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-xs text-slate-400">
-                        <span>Daily Capacity:</span>
-                        <span className="font-mono text-white">{inbox.sentToday} / {inbox.dailyLimit}</span>
-                      </div>
-                      <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-cyan-500 rounded-full"
-                          style={{ width: `${Math.min(100, (inbox.sentToday / inbox.dailyLimit) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Shared 50,000 emails/month plan. No artificial daily caps configured — all reps can send dynamically.
+                    </p>
                   </div>
-                ))}
+                  <div className="flex items-center gap-2">
+                    <span className="bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">
+                      50,000 Total Monthly Pool
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-[#07090e] p-3.5 rounded-xl border border-white/5">
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold">Total Monthly Allocation</span>
+                    <div className="text-xl font-black text-white mt-1">50,000</div>
+                    <span className="text-[10px] text-slate-500">Resend Relay Pool</span>
+                  </div>
+                  <div className="bg-[#07090e] p-3.5 rounded-xl border border-white/5">
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold">Dispatched This Month</span>
+                    <div className="text-xl font-black text-cyan-400 font-mono mt-1">
+                      {(metrics.emailsSent || 0).toLocaleString()}
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-medium">Real-time team total</span>
+                  </div>
+                  <div className="bg-[#07090e] p-3.5 rounded-xl border border-white/5">
+                    <span className="text-[10px] text-slate-500 uppercase font-semibold">Available Remaining</span>
+                    <div className="text-xl font-black text-emerald-400 font-mono mt-1">
+                      {Math.max(0, 50000 - (metrics.emailsSent || 0)).toLocaleString()}
+                    </div>
+                    <span className="text-[10px] text-emerald-400/80 font-medium">Ready for dispatch</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex justify-between text-xs font-semibold text-slate-400">
+                    <span>Monthly Pool Usage:</span>
+                    <span className="font-mono text-cyan-300">
+                      {(metrics.emailsSent || 0).toLocaleString()} / 50,000 ({(((metrics.emailsSent || 0) / 50000) * 100).toFixed(2)}%)
+                    </span>
+                  </div>
+                  <div className="w-full h-2.5 bg-[#07090e] border border-white/5 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-500 to-indigo-500 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, Math.max(1, ((metrics.emailsSent || 0) / 50000) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Rep Outbound Identities */}
+              <div className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/20">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Configured Outbound Sending Identities ({inboxes.length})
+                  </h3>
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full uppercase font-bold">
+                    ✓ No Daily Limits Enforced
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {inboxes.map(inbox => {
+                    const repStats = teamLeaderboard.find(a => a._id === inbox._id || a.email?.toLowerCase() === inbox.fromEmail?.toLowerCase());
+                    const repSentToday = repStats?.emailsSent || inbox.sentToday || 0;
+
+                    return (
+                      <div key={inbox._id} className="bg-[#07090e] p-4 rounded-xl border border-white/5 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-bold text-white text-sm">{inbox.name}</div>
+                            <div className="text-xs text-cyan-400 font-mono mt-0.5">{inbox.fromEmail}</div>
+                          </div>
+                          <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full">
+                            {inbox.domainStatus || 'Verified'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between p-2.5 bg-white/[0.02] rounded-lg border border-white/5 text-xs">
+                          <span className="text-slate-400">Sent Today:</span>
+                          <span className="font-mono font-bold text-white">{repSentToday} emails</span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] text-slate-500">
+                          <span>Daily Limit: <strong className="text-emerald-400 font-normal">None (Unlimited)</strong></span>
+                          <span>Pool: <strong className="text-slate-300 font-normal">50k Shared</strong></span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
 
           {/* TAB 5: DIALER & SYSTEM CONFIG */}
           {activeTab === 'settings' && (
-            <form onSubmit={handleSaveSettings} className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-5 shadow-lg shadow-black/20 max-w-2xl">
-              <h2 className="text-lg font-bold text-white">Dialer & Operational Configuration</h2>
+            <div className="space-y-6 max-w-3xl">
+              <BlastEngineSettingsCard />
 
-              {settingsSuccess && (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl">
-                  {settingsSuccess}
-                </div>
-              )}
+              <form onSubmit={handleSaveSettings} className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-5 shadow-lg shadow-black/20">
+                <h2 className="text-lg font-bold text-white">Dialer & Operational Configuration</h2>
 
-              <div className="space-y-4">
-                <label className="flex items-center justify-between bg-[#07090e] p-3 rounded-xl border border-white/5 cursor-pointer">
-                  <div>
-                    <span className="text-xs font-bold text-white block">Enable Call Recording</span>
-                    <span className="text-[11px] text-slate-400">Record WebRTC call audio for quality and compliance.</span>
+                {settingsSuccess && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl">
+                    {settingsSuccess}
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={settings.callRecordingEnabled}
-                    onChange={e => setSettings({ ...settings, callRecordingEnabled: e.target.checked })}
-                    className="w-4 h-4 accent-cyan-500 rounded"
-                  />
-                </label>
+                )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">Allowed Hours Start (24h)</label>
+                <div className="space-y-4">
+                  <label className="flex items-center justify-between bg-[#07090e] p-3.5 rounded-xl border border-white/5 cursor-pointer">
+                    <div>
+                      <span className="text-xs font-bold text-white block">Enable Call Recording</span>
+                      <span className="text-[11px] text-slate-400">Record WebRTC call audio for quality and compliance.</span>
+                    </div>
                     <input
-                      type="number"
-                      value={settings.allowedHoursStart}
-                      onChange={e => setSettings({ ...settings, allowedHoursStart: e.target.value })}
-                      className="w-full bg-[#07090e] border border-white/10 rounded-xl px-3 py-2 text-xs text-white"
+                      type="checkbox"
+                      checked={settings.callRecordingEnabled}
+                      onChange={e => setSettings({ ...settings, callRecordingEnabled: e.target.checked })}
+                      className="w-4 h-4 accent-cyan-500 rounded cursor-pointer"
+                    />
+                  </label>
+
+                  {/* Operational Calling & Emailing Hours in AM / PM */}
+                  <div className="bg-[#080b12] p-4 rounded-xl border border-white/5 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/5 pb-2">
+                      <div>
+                        <span className="text-xs font-bold text-white block">🕒 Operational Hours (AM / PM Enforcement)</span>
+                        <span className="text-[11px] text-slate-400">
+                          Strictly enforces calling, SMS, and email blast limits across all sales agents in real-time.
+                        </span>
+                      </div>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                        Real-time Guard Active
+                      </span>
+                    </div>
+
+                    {/* Quick Presets */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase">Presets:</span>
+                      <button
+                        type="button"
+                        onClick={() => setSettings({ ...settings, allowedHoursStart: 9, allowedHoursEnd: 17 })}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5 transition-colors cursor-pointer"
+                      >
+                        9:00 AM – 5:00 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSettings({ ...settings, allowedHoursStart: 8, allowedHoursEnd: 20 })}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5 transition-colors cursor-pointer"
+                      >
+                        8:00 AM – 8:00 PM
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSettings({ ...settings, allowedHoursStart: 0, allowedHoursEnd: 24 })}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-cyan-400 border border-cyan-500/20 transition-colors cursor-pointer"
+                      >
+                        24/7 (No Limit)
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">Start Allowed Time (AM/PM)</label>
+                        <select
+                          value={settings.allowedHoursStart ?? 8}
+                          onChange={e => setSettings({ ...settings, allowedHoursStart: parseInt(e.target.value, 10) })}
+                          className="w-full bg-[#121624] border border-white/10 focus:border-cyan-500 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none cursor-pointer"
+                        >
+                          {[
+                            { value: 0, label: '12:00 AM (Midnight)' },
+                            { value: 1, label: '01:00 AM' },
+                            { value: 2, label: '02:00 AM' },
+                            { value: 3, label: '03:00 AM' },
+                            { value: 4, label: '04:00 AM' },
+                            { value: 5, label: '05:00 AM' },
+                            { value: 6, label: '06:00 AM' },
+                            { value: 7, label: '07:00 AM' },
+                            { value: 8, label: '08:00 AM' },
+                            { value: 9, label: '09:00 AM' },
+                            { value: 10, label: '10:00 AM' },
+                            { value: 11, label: '11:00 AM' },
+                            { value: 12, label: '12:00 PM (Noon)' },
+                            { value: 13, label: '01:00 PM' },
+                            { value: 14, label: '02:00 PM' },
+                            { value: 15, label: '03:00 PM' },
+                            { value: 16, label: '04:00 PM' },
+                            { value: 17, label: '05:00 PM' },
+                            { value: 18, label: '06:00 PM' },
+                            { value: 19, label: '07:00 PM' },
+                            { value: 20, label: '08:00 PM' },
+                            { value: 21, label: '09:00 PM' },
+                            { value: 22, label: '10:00 PM' },
+                            { value: 23, label: '11:00 PM' }
+                          ].map(opt => (
+                            <option key={`start-${opt.value}`} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">End Allowed Time (AM/PM)</label>
+                        <select
+                          value={settings.allowedHoursEnd ?? 18}
+                          onChange={e => setSettings({ ...settings, allowedHoursEnd: parseInt(e.target.value, 10) })}
+                          className="w-full bg-[#121624] border border-white/10 focus:border-cyan-500 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none cursor-pointer"
+                        >
+                          {[
+                            { value: 1, label: '01:00 AM' },
+                            { value: 2, label: '02:00 AM' },
+                            { value: 3, label: '03:00 AM' },
+                            { value: 4, label: '04:00 AM' },
+                            { value: 5, label: '05:00 AM' },
+                            { value: 6, label: '06:00 AM' },
+                            { value: 7, label: '07:00 AM' },
+                            { value: 8, label: '08:00 AM' },
+                            { value: 9, label: '09:00 AM' },
+                            { value: 10, label: '10:00 AM' },
+                            { value: 11, label: '11:00 AM' },
+                            { value: 12, label: '12:00 PM (Noon)' },
+                            { value: 13, label: '01:00 PM' },
+                            { value: 14, label: '02:00 PM' },
+                            { value: 15, label: '03:00 PM' },
+                            { value: 16, label: '04:00 PM' },
+                            { value: 17, label: '05:00 PM' },
+                            { value: 18, label: '06:00 PM' },
+                            { value: 19, label: '07:00 PM' },
+                            { value: 20, label: '08:00 PM' },
+                            { value: 21, label: '09:00 PM' },
+                            { value: 22, label: '10:00 PM' },
+                            { value: 23, label: '11:00 PM' },
+                            { value: 24, label: '12:00 AM (Midnight / End of Day)' }
+                          ].map(opt => (
+                            <option key={`end-${opt.value}`} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">CRM Webhook Endpoint URL</label>
+                    <input
+                      type="url"
+                      value={settings.crmWebhookUrl || ''}
+                      onChange={e => setSettings({ ...settings, crmWebhookUrl: e.target.value })}
+                      placeholder="https://your-crm.com/api/webhook"
+                      className="w-full bg-[#07090e] border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-400 mb-1">Allowed Hours End (24h)</label>
-                    <input
-                      type="number"
-                      value={settings.allowedHoursEnd}
-                      onChange={e => setSettings({ ...settings, allowedHoursEnd: e.target.value })}
-                      className="w-full bg-[#07090e] border border-white/10 rounded-xl px-3 py-2 text-xs text-white"
-                    />
-                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-400 mb-1">CRM Webhook Endpoint URL</label>
-                  <input
-                    type="url"
-                    value={settings.crmWebhookUrl || ''}
-                    onChange={e => setSettings({ ...settings, crmWebhookUrl: e.target.value })}
-                    placeholder="https://your-crm.com/api/webhook"
-                    className="w-full bg-[#07090e] border border-white/10 rounded-xl px-3 py-2 text-xs text-white"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={savingSettings}
-                className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-lg shadow-cyan-500/20"
-              >
-                {savingSettings ? 'Saving Settings...' : 'Save Configuration'}
-              </button>
-            </form>
+                <button
+                  type="submit"
+                  disabled={savingSettings}
+                  className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-lg shadow-cyan-500/20 transition-all cursor-pointer flex items-center gap-2"
+                >
+                  {savingSettings ? 'Saving Configuration...' : '💾 Save Configuration'}
+                </button>
+              </form>
+            </div>
           )}
 
           {/* TAB 6: CSV LEAD UPLOAD */}
@@ -562,6 +765,22 @@ export default function Dashboard() {
                     onChange={e => setSelectedFile(e.target.files[0])}
                     className="w-full bg-[#07090e] border border-white/10 rounded-xl p-2 text-xs text-white"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">Assign Uploaded Leads To (Optional)</label>
+                  <select
+                    value={uploadAssigneeId}
+                    onChange={e => setUploadAssigneeId(e.target.value)}
+                    className="w-full bg-[#07090e] border border-white/10 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 cursor-pointer"
+                  >
+                    <option value="">-- Unassigned (Available in Pool) --</option>
+                    {registeredUsers.filter(u => u.approved !== false).map(u => (
+                      <option key={u._id} value={u._id}>
+                        {u.name} ({u.role}) - {u.email}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <button

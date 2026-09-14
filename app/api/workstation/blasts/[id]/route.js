@@ -79,23 +79,20 @@ export async function PUT(req, { params }) {
       );
     }
 
-    let newStatus = campaign.status;
-
+    // Deterministic state machine transitions
     if (action === 'pause') {
       if (['processing', 'queued', 'running'].includes(campaign.status)) {
-        newStatus = 'paused';
+        campaign.status = 'paused';
       }
     } else if (action === 'resume') {
       if (campaign.status === 'paused') {
-        newStatus = 'queued';
+        campaign.status = 'queued';
       }
     } else if (action === 'cancel') {
-      newStatus = 'cancelled';
-    }
-
-    campaign.status = newStatus;
-    if (newStatus === 'cancelled') {
-      campaign.completedAt = new Date();
+      if (!['completed', 'cancelled'].includes(campaign.status)) {
+        campaign.status = 'cancelled';
+        campaign.completedAt = new Date();
+      }
     }
 
     await campaign.save();
@@ -103,7 +100,7 @@ export async function PUT(req, { params }) {
     await logAuditEvent({
       userId: user._id,
       action: 'note',
-      notes: `Updated Blast Campaign '${campaign.name}' status to ${newStatus} via action '${action}'.`
+      notes: `Updated Blast Campaign '${campaign.name}' status to ${campaign.status} via action '${action}'.`
     });
 
     return NextResponse.json({
@@ -113,6 +110,56 @@ export async function PUT(req, { params }) {
   } catch (err) {
     return NextResponse.json(
       { success: false, error: { code: 'SERVER_ERROR', message: err.message || 'Failed to update campaign state.' } },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(req, { params }) {
+  try {
+    const { user, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
+
+    const { id } = await params;
+    await connectDB();
+
+    const campaign = await BlastCampaign.findById(id);
+    if (!campaign) {
+      return NextResponse.json(
+        { success: false, error: { code: 'NOT_FOUND', message: 'Campaign not found.' } },
+        { status: 404 }
+      );
+    }
+
+    if (!canAccessResource(user, campaign.createdBy)) {
+      return NextResponse.json(
+        { success: false, error: { code: 'FORBIDDEN', message: 'You are not authorized to delete this campaign.' } },
+        { status: 403 }
+      );
+    }
+
+    // Preserve historical auditability: Soft-delete active/queued dispatches by marking as cancelled
+    if (['queued', 'processing', 'running', 'paused'].includes(campaign.status)) {
+      campaign.status = 'cancelled';
+      campaign.completedAt = new Date();
+      await campaign.save();
+    } else if (campaign.status === 'draft') {
+      await BlastCampaign.deleteOne({ _id: id });
+    }
+
+    await logAuditEvent({
+      userId: user._id,
+      action: 'note',
+      notes: `Cancelled/removed Blast Campaign '${campaign.name}' (ID: ${id}).`
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'Campaign state safely updated.'
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: { code: 'SERVER_ERROR', message: err.message || 'Failed to remove campaign.' } },
       { status: 500 }
     );
   }

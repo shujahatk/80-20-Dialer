@@ -1,0 +1,57 @@
+services:
+  listmonk-db:
+    image: postgres:15-alpine
+    container_name: newcode-listmonk-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LISTMONK_DB_USER:?LISTMONK_DB_USER required}
+      POSTGRES_PASSWORD: ${LISTMONK_DB_PASSWORD:?LISTMONK_DB_PASSWORD required}
+      POSTGRES_DB: ${LISTMONK_DB_NAME:-listmonk}
+    volumes:
+      - listmonk-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${LISTMONK_DB_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blast-network
+
+  listmonk:
+    image: listmonk/listmonk:v4.0.1
+    container_name: newcode-listmonk-app
+    restart: unless-stopped
+    depends_on:
+      listmonk-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${LISTMONK_PORT:-9001}:9000"
+    environment:
+      - LISTMONK_app__address=0.0.0.0:9000
+      - LISTMONK_app__admin_username=${LISTMONK_API_USERNAME:?LISTMONK_API_USERNAME required}
+      - LISTMONK_app__admin_password=${LISTMONK_API_PASSWORD:?LISTMONK_API_PASSWORD required}
+      - LISTMONK_db__user=${LISTMONK_DB_USER:?LISTMONK_DB_USER required}
+      - LISTMONK_db__password=${LISTMONK_DB_PASSWORD:?LISTMONK_DB_PASSWORD required}
+      - LISTMONK_db__database=${LISTMONK_DB_NAME:-listmonk}
+      - LISTMONK_db__host=listmonk-db
+      - LISTMONK_db__port=5432
+      - LISTMONK_db__ssl_mode=disable
+    volumes:
+      - listmonk-uploads:/listmonk/uploads
+      - ./listmonk/config.toml:/listmonk/config.toml:ro
+    command: [ "sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk --config config.toml" ]
+    networks:
+      - blast-network
+
+volumes:
+  listmonk-postgres-data:
+    name: listmonk-postgres-data
+  listmonk-uploads:
+    name: listmonk-uploads
+
+networks:
+  blast-network:
+    name: blast-network
+    driver: bridge

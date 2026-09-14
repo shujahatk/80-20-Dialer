@@ -1,0 +1,19 @@
+[app]
+address = "0.0.0.0:9000"
+concurrency = 10
+message_rate = 25
+batch_size = 100
+max_send_errors = 10
+root_url = "http://127.0.0.1:9000"
+enable_public_subscription_page = false
+enable_public_archive = false
+send_optin_confirmation = false
+
+[db]
+host = "listmonk-db"
+port = 5432
+ssl_mode = "disable"
+max_open = 25
+max_idle = 10
+max_lifetime = "300s"
+timeout = "10s"

@@ -6,6 +6,22 @@ import { useRouter } from 'next/navigation';
 export default function AdminHeader({ user, searchQuery, setSearchQuery, alerts = [], onRefresh }) {
   const router = useRouter();
   const [showAlertsPopover, setShowAlertsPopover] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefreshClick = async () => {
+    setIsRefreshing(true);
+    try {
+      if (typeof onRefresh === 'function') {
+        await onRefresh();
+      } else {
+        router.refresh();
+      }
+    } catch (err) {
+      console.warn('Refresh error:', err);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
 
   return (
     <header className="h-16 border-b border-white/5 bg-[#07090e]/80 backdrop-blur-md px-6 flex items-center justify-between z-20 shrink-0">
@@ -29,14 +45,15 @@ export default function AdminHeader({ user, searchQuery, setSearchQuery, alerts 
       <div className="flex items-center gap-3">
         {/* Refresh button */}
         <button
-          onClick={onRefresh}
-          className="p-2 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-all text-xs font-semibold flex items-center gap-1.5"
+          onClick={handleRefreshClick}
+          disabled={isRefreshing}
+          className="p-2 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-xl transition-all text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
           title="Refresh Data"
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          <span className="hidden sm:inline">Refresh</span>
+          <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
         </button>
 
         {/* Quick Launch Buttons */}

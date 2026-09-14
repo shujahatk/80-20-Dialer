@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { assertStatsAccess } from '@/lib/middleware/authGuard';
 import { LoginSessionStore } from '@/lib/store';
 
 export async function GET(req) {
@@ -13,7 +14,17 @@ export async function GET(req) {
     }
 
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId') || user._id;
+    const requestedUserId = searchParams.get('userId');
+
+    // IDOR check: Salespeople cannot query stats of other users
+    if (requestedUserId && !assertStatsAccess(user, requestedUserId)) {
+      return NextResponse.json(
+        { success: false, error: { code: 'FORBIDDEN', message: 'Forbidden: You can only access your own session statistics.' } },
+        { status: 403 }
+      );
+    }
+
+    const userId = requestedUserId || user._id || user.id;
 
     const stats = await LoginSessionStore.getUserStats(userId);
     return NextResponse.json({

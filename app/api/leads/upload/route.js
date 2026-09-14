@@ -1,148 +1,112 @@
-import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
-import { LeadStore } from '@/lib/store';
-import csv from 'csv-parser';
-import { Readable } from 'stream';
-
-const CSV_COLUMN_MAP = {
-  name: ['name', 'full_name', 'fullname', 'contact_name', 'contactname'],
-  phone: ['phone', 'phone_number', 'phonenumber', 'mobile', 'cell', 'telephone'],
-  email: ['email', 'email_address', 'emailaddress', 'e-mail'],
-  position: ['position', 'title', 'job_title', 'jobtitle', 'role'],
-  company_name: ['company', 'company_name', 'companyname', 'organization', 'org'],
-  company_website: ['website', 'company_website', 'companywebsite', 'url'],
-  niche: ['niche', 'industry', 'sector', 'category'],
-  country: ['country', 'country_code'],
-  city: ['city', 'town'],
-  region: ['region', 'state', 'province', 'area'],
-  timezone: ['timezone', 'tz'],
-  list: ['list', 'list_name', 'listname', 'source'],
-  priority: ['priority', 'rank', 'score']
-};
-
-function mapCsvHeaders(headers) {
-  const mapped = {};
-  const lowerHeaders = headers.map(h => h.toLowerCase().trim().replace(/[\s-]+/g, '_'));
-  for (const [field, aliases] of Object.entries(CSV_COLUMN_MAP)) {
-    const idx = lowerHeaders.findIndex(h => aliases.includes(h));
-    if (idx !== -1) mapped[field] = headers[idx];
-  }
-  return mapped;
-}
+import { NextResponse } from 'next/server.js';
+import { requireManager } from '../../../../lib/middleware/authGuard.js';
+import { processCsvUpload } from '../../../../lib/csv/importLeads.js';
 
 export async function POST(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user || !['owner', 'manager', 'admin'].includes(user.role)) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized. Manager privileges required.' },
-        { status: 401 }
-      );
+    const { user, errorResponse } = await requireManager(req);
+    if (errorResponse) return errorResponse;
+
+    const contentType = req.headers.get('content-type') || '';
+    let csvBufferOrString = null;
+    let assignToUserId = 'pool';
+    let manualOverrides = {};
+    let duplicateStrategy = 'skip';
+    let previewOnly = false;
+    let defaultList = '';
+
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      const file = formData.get('file');
+      assignToUserId = formData.get('assignToUserId') || formData.get('userId') || 'pool';
+      duplicateStrategy = formData.get('duplicateStrategy') || 'skip';
+      previewOnly = formData.get('preview') === 'true' || formData.get('previewOnly') === 'true';
+      defaultList = formData.get('defaultList') || '';
+
+      const rawOverrides = formData.get('manualOverrides');
+      if (rawOverrides) {
+        try {
+          manualOverrides = typeof rawOverrides === 'string' ? JSON.parse(rawOverrides) : rawOverrides;
+        } catch (e) {}
+      }
+
+      if (!file) {
+        return NextResponse.json(
+          { success: false, message: 'No CSV file uploaded.' },
+          { status: 400 }
+        );
+      }
+
+      const MAX_SIZE = 15 * 1024 * 1024;
+      if (file.size && file.size > MAX_SIZE) {
+        return NextResponse.json(
+          { success: false, message: 'File exceeds maximum upload size limit of 15MB.' },
+          { status: 413 }
+        );
+      }
+
+      csvBufferOrString = Buffer.from(await file.arrayBuffer());
+    } else {
+      const body = await req.json().catch(() => ({}));
+      csvBufferOrString = body.csvText || body.csvContent || '';
+      assignToUserId = body.assignToUserId || body.userId || 'pool';
+      manualOverrides = body.manualOverrides || {};
+      duplicateStrategy = body.duplicateStrategy || 'skip';
+      previewOnly = body.preview === true || body.previewOnly === true;
+      defaultList = body.defaultList || '';
     }
 
-    const formData = await req.formData();
-    const file = formData.get('file');
-    const campaignId = formData.get('campaignId') || null;
-    const assignTo = formData.get('userId') || null;
-
-    if (!file) {
+    if (!csvBufferOrString || csvBufferOrString.length === 0) {
       return NextResponse.json(
-        { success: false, message: 'No CSV file provided.' },
+        { success: false, message: 'No readable CSV content provided.' },
         { status: 400 }
       );
     }
 
-    const results = [];
-    const duplicates = [];
-    const errors = [];
-
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const stream = Readable.from(buffer.toString());
-
-    await new Promise((resolve, reject) => {
-      stream
-        .pipe(csv())
-        .on('data', (row) => results.push(row))
-        .on('end', resolve)
-        .on('error', reject);
+    const result = await processCsvUpload({
+      csvBufferOrString,
+      assignToUserId,
+      manualOverrides,
+      duplicateStrategy,
+      previewOnly,
+      defaultList
     });
 
-    const headers = results.length > 0 ? Object.keys(results[0]) : [];
-    const columnMap = mapCsvHeaders(headers);
-
-    for (let i = 0; i < results.length; i++) {
-      const row = results[i];
-      
-      const leadData = {
-        contact: {
-          name: row[columnMap.name] || '',
-          position: row[columnMap.position] || '',
-          phone: row[columnMap.phone] || '',
-          email: row[columnMap.email] || '',
-          preferredChannel: ''
-        },
-        company: {
-          name: row[columnMap.company_name] || '',
-          website: row[columnMap.company_website] || '',
-          niche: row[columnMap.niche] || '',
-          notes: ''
-        },
-        geography: {
-          country: row[columnMap.country] || '',
-          city: row[columnMap.city] || '',
-          region: row[columnMap.region] || '',
-          timezone: row[columnMap.timezone] || 'UTC'
-        },
-        assignment: {
-          list: row[columnMap.list] || '',
-          priority: parseInt(row[columnMap.priority]) || 0,
-          dateAssigned: new Date()
-        },
-        status: 'new',
-        nextAction: 'call',
-        userId: assignTo,
-        campaignId: campaignId
-      };
-
-      if (!leadData.contact.name) {
-        errors.push({ row: i + 2, reason: 'Missing lead name' });
-        continue;
-      }
-
-      if (leadData.contact.phone) {
-        const existing = await LeadStore.findPendingByPhone(leadData.contact.phone);
-        if (existing.length > 0) {
-          duplicates.push({ row: i + 2, name: leadData.contact.name, phone: leadData.contact.phone });
-          continue;
-        }
-      }
-
-      if (leadData.contact.email) {
-        const existing = await LeadStore.findPendingByEmail(leadData.contact.email);
-        if (existing.length > 0) {
-          duplicates.push({ row: i + 2, name: leadData.contact.name, email: leadData.contact.email });
-          continue;
-        }
-      }
-
-      await LeadStore.create(leadData);
+    if (!result.success) {
+      return NextResponse.json(
+        { success: false, message: result.message || 'Failed to process CSV file.' },
+        { status: 400 }
+      );
     }
 
     return NextResponse.json({
       success: true,
-      message: `Import complete. ${results.length - duplicates.length - errors.length} leads imported.`,
+      message: result.message,
       data: {
-        total: results.length,
-        imported: results.length - duplicates.length - errors.length,
-        duplicates: duplicates.length,
-        duplicateList: duplicates,
-        errors: errors.length,
-        errorList: errors
+        total: result.summary.totalRows,
+        importedCount: result.summary.imported,
+        skippedCount: result.summary.skipped,
+        duplicates: result.summary.duplicates,
+        invalid: result.summary.invalid,
+        summary: result.summary,
+        headerSummary: result.headerSummary,
+        columnMap: result.columnMap,
+        sampleRows: result.sampleRows || [],
+        duplicateList: result.duplicateList || [],
+        invalidList: result.invalidList || [],
+        preview: result.preview || false,
+        assignedTo: assignToUserId,
+        destination: assignToUserId === 'round_robin'
+          ? 'Round-Robin Distribution'
+          : assignToUserId === 'pool'
+          ? 'Unassigned Global Pool'
+          : 'Salesperson Queue'
       }
     });
   } catch (err) {
+    console.error('[CSV Upload Processing Error]:', err);
     return NextResponse.json(
-      { success: false, message: err.message || 'Server error occurred.' },
+      { success: false, message: err.message || 'Server error occurred during CSV import.' },
       { status: 500 }
     );
   }

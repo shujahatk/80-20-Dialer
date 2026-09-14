@@ -76,7 +76,7 @@ export default function WorkstationBlastEmail() {
 
       // Load Inboxes
       setInboxes([
-        { _id: 'default', name: 'Default Outbound Identity', fromEmail: 'onboarding@resend.dev', fromName: 'Outbound Sales', dailyLimit: 500, sentToday: 12 }
+        { _id: 'default', name: 'Primary Outbound Identity (Resend)', fromEmail: 'outreach@8020acquisition.com', fromName: '80/20 Acquisition', dailyLimit: 500, sentToday: 0 }
       ]);
 
       // Load Existing Campaigns

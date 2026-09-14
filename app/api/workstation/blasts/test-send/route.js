@@ -51,7 +51,7 @@ export async function POST(req) {
       subject: `[TEST BLAST] ${subject.replace(/{{firstName}}/g, 'Test User').replace(/{{company}}/g, 'Acme Corp')}`,
       html: finalBody,
       fromName: user.name || '80/20 Outbound Test',
-      fromEmail: user.email || 'onboarding@resend.dev'
+      fromEmail: user.email || 'outreach@8020acquisition.com'
     });
 
     if (!result.success) {

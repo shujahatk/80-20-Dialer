@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { LeadStore, ActivityLogStore } from '@/lib/store';
+import { validateResendWebhook } from '@/lib/webhookValidator';
 
 async function processEmailEvent(eventData) {
   const { event, email, from, subject, text } = eventData;
@@ -69,9 +70,15 @@ async function processEmailEvent(eventData) {
 
 export async function POST(req) {
   try {
-    const body = await req.json();
+    const rawText = await req.text();
 
-    // SendGrid events are usually batch arrays
+    if (!validateResendWebhook(req, rawText)) {
+      console.warn('[Resend Webhook Security]: Unauthorized or invalid signature rejected.');
+      return new Response('Unauthorized Webhook Signature', { status: 401 });
+    }
+
+    const body = rawText ? JSON.parse(rawText) : {};
+
     if (Array.isArray(body)) {
       for (const eventObj of body) {
         await processEmailEvent(eventObj);
@@ -83,6 +90,6 @@ export async function POST(req) {
     return new Response('OK', { status: 200 });
   } catch (err) {
     console.error('[Email Webhook Error]:', err.message);
-    return new Response('OK', { status: 200 }); // Always return 200 OK to SendGrid to prevent webhook retries
+    return new Response('OK', { status: 200 });
   }
 }

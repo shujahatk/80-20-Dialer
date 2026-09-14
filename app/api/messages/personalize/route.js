@@ -34,6 +34,14 @@ export async function POST(req) {
       );
     }
 
+    const { assertLeadAccess } = await import('@/lib/middleware/authGuard');
+    if (!assertLeadAccess(user, lead)) {
+      return NextResponse.json(
+        { success: false, error: { code: 'FORBIDDEN', message: 'Forbidden: You do not have permission to personalize this lead.' } },
+        { status: 403 }
+      );
+    }
+
     const generatedBody = await generatePersonalizedMessage({
       lead,
       basePrompt,

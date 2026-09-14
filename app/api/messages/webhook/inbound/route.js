@@ -1,17 +1,30 @@
 import { MessageStore, LeadStore, ActivityLogStore } from '@/lib/store';
+import { validateTwilioWebhook } from '@/lib/webhookValidator.js';
+import { SuppressionStore } from '@/lib/suppression/suppressionStore.js';
+
+const OPT_OUT_KEYWORDS = new Set(['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT']);
 
 export async function POST(req) {
   try {
     let body = {};
     const contentType = req.headers.get('content-type') || '';
     
-    if (contentType.includes('application/x-www-form-urlencoded')) {
+    if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
       for (const [key, value] of formData.entries()) {
         body[key] = value;
       }
     } else {
-      body = await req.json();
+      try {
+        body = await req.json();
+      } catch (e) {
+        body = {};
+      }
+    }
+
+    if (!validateTwilioWebhook(req, body)) {
+      console.warn('[Inbound SMS Webhook]: Unauthorized Twilio signature rejected.');
+      return new Response('Unauthorized Webhook Signature', { status: 401 });
     }
 
     const { From, Body, MessageSid, To } = body;
@@ -24,8 +37,9 @@ export async function POST(req) {
 
     const senderPhone = From;
     const messageBody = Body.trim();
+    const isOptOut = OPT_OUT_KEYWORDS.has(messageBody.toUpperCase());
 
-    // Log the inbound message
+    // 1. Log the inbound message
     await MessageStore.create({
       userId: null,
       messageSid: MessageSid || `inbound-${Date.now()}`,
@@ -38,9 +52,46 @@ export async function POST(req) {
     });
 
     const leads = await LeadStore.findPendingByPhone(senderPhone);
-    if (leads.length > 0) {
-      const lead = leads[0];
-      await LeadStore.update(lead._id, {
+    const matchedLead = leads.length > 0 ? leads[0] : null;
+
+    if (isOptOut) {
+      console.log(`[SMS Inbound Opt-Out]: Received opt-out keyword from ${senderPhone}`);
+      await SuppressionStore.add({
+        phone: senderPhone,
+        channel: 'all',
+        reason: `SMS opt-out keyword: ${messageBody}`,
+        leadId: matchedLead?._id || null,
+        source: 'inbound_sms'
+      });
+
+      if (matchedLead) {
+        await LeadStore.update(matchedLead._id, {
+          lastAction: `Opt-Out / DNC via SMS: ${messageBody}`,
+          lastActionDate: new Date(),
+          status: 'opted-out',
+          coldOutreachStopped: true,
+          suppression: { phone: true, email: true, sms: true, whatsapp: true, dnc: true },
+          hasUnansweredReply: true,
+          lastReplyText: messageBody.substring(0, 200),
+          lastReplyChannel: 'sms',
+          lastReplyAt: new Date(),
+          'emailSequence.status': 'stopped',
+          'emailSequence.stopReason': 'dnc_opt_out'
+        });
+
+        await ActivityLogStore.create({
+          leadId: matchedLead._id,
+          userId: matchedLead.userId || 'system',
+          action: 'status_change',
+          channel: 'sms',
+          direction: 'inbound',
+          outcome: 'opted-out',
+          notes: `Contact opted out via SMS keyword: "${messageBody}". Permanent DNC active.`,
+          messageSid: MessageSid || ''
+        });
+      }
+    } else if (matchedLead) {
+      await LeadStore.update(matchedLead._id, {
         lastAction: `Inbound SMS: ${messageBody.substring(0, 100)}`,
         lastActionDate: new Date(),
         hasUnansweredReply: true,
@@ -52,8 +103,8 @@ export async function POST(req) {
       });
 
       await ActivityLogStore.create({
-        leadId: lead._id,
-        userId: lead.userId || 'system',
+        leadId: matchedLead._id,
+        userId: matchedLead.userId || 'system',
         action: 'sms',
         channel: 'sms',
         direction: 'inbound',
@@ -72,4 +123,8 @@ export async function POST(req) {
       headers: { 'Content-Type': 'text/xml' }
     });
   }
+}
+
+export async function GET(req) {
+  return POST(req);
 }

@@ -10,32 +10,50 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
+# testing & coverage
 /coverage
 
-# next.js
+# next.js build
 /.next/
 /out/
-
-# production
 /build
 
-# misc
-.DS_Store
+# environment & secrets
+.env
+.env.*
+.env.local
+.env.production
+.env.development
 *.pem
+*.key
+*.cert
 
-# debug
+# local datastores & database dumps
+/data/store.json
+/data/*.json
+/data/*.db
+
+# temporary scratch, logs & debugging artifacts
+/scratch/
+*.log
+*.log*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+error.txt
+temp_err.txt
+output.txt
+*.tmp
 
-# env files (can opt-in for committing if needed)
-.env*
+# test & demo CSV imports containing test numbers
+*.csv
+demo_leads*.csv
+test_leads*.csv
 
-# vercel
+# misc system files
+.DS_Store
+Thumbs.db
 .vercel
-
-# typescript
 *.tsbuildinfo
 next-env.d.ts

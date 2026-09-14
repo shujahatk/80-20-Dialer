@@ -1,63 +1,82 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
-import { connectDB } from '@/lib/db';
-import User from '@/models/User';
-import Call from '@/models/Call';
-import Message from '@/models/Message';
-import Lead from '@/models/Lead';
-import LoginSession from '@/models/LoginSession';
+import { requireManager } from '@/lib/middleware/authGuard';
+import { UserStore, CallStore, MessageStore, LeadStore, ActivityLogStore } from '@/lib/store';
 
 export async function GET(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user || !['salesperson', 'manager', 'owner', 'admin'].includes(user.role)) {
-      return NextResponse.json(
-        { success: false, error: { code: 'UNAUTHORIZED', message: 'Unauthorized access.' } },
-        { status: 401 }
-      );
+    const auth = await requireManager(req);
+    if (auth.errorResponse) {
+      return auth.errorResponse;
     }
+    const user = auth.user;
 
-    await connectDB();
+    const users = await UserStore.findAllUsers();
+    const salespeople = users.filter(u => u.role === 'salesperson' && u.approved !== false);
 
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const fiveMinsAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const leaderboard = await Promise.all(salespeople.map(async (sp) => {
+      const spId = String(sp._id || sp.id);
+      const userStats = await ActivityLogStore.getUserStats(spId).catch(() => ({
+        callsToday: 0,
+        emailsToday: 0,
+        smsToday: 0,
+        whatsappToday: 0,
+        talkTimeToday: 0
+      }));
 
-    // Fetch all sales agents
-    const agents = await User.find({ role: 'salesperson', active: true }).lean();
+      // Find user calls from CallStore
+      const userCalls = await CallStore.findByUserId(spId).catch(() => []);
+      const todayCalls = userCalls.filter(c => {
+        const cDate = new Date(c.createdAt || c.created_at || c.startTime || 0);
+        return cDate >= startOfDay;
+      });
 
-    const leaderboard = [];
+      const callsCount = Math.max(userStats.callsToday || 0, todayCalls.length);
+      const connectedCalls = todayCalls.filter(c => 
+        (c.duration && c.duration > 0) || 
+        ['completed', 'answered', 'in-progress'].includes(c.status)
+      ).length;
 
-    for (const sp of agents) {
-      const spId = sp._id;
+      // Find user emails from MessageStore
+      const userMessages = await MessageStore.findByUserId(spId).catch(() => []);
+      const todayEmails = userMessages.filter(m => {
+        const mDate = new Date(m.createdAt || m.created_at || 0);
+        return m.channel === 'email' && mDate >= startOfDay;
+      });
+      const emailsSent = Math.max(userStats.emailsToday || 0, todayEmails.length);
 
-      const callsToday = await Call.countDocuments({ userId: spId, createdAt: { $gte: startOfDay } });
-      const connectedCalls = await Call.countDocuments({ userId: spId, createdAt: { $gte: startOfDay }, durationSeconds: { $gt: 0 } });
-      const booked = await Lead.countDocuments({ assignedTo: spId, status: { $in: ['meeting-booked', 'interested'] } });
-      const emailsSent = await Message.countDocuments({ userId: spId, channel: 'email', createdAt: { $gte: startOfDay }, status: 'sent' });
-      const repliesCount = await Message.countDocuments({ userId: spId, channel: 'email', direction: 'inbound', createdAt: { $gte: startOfDay } });
+      // Find booked/interested leads for this rep
+      const managerMetrics = await LeadStore.getManagerMetrics(spId).catch(() => ({ booked: 0, interested: 0 }));
+      const bookedCount = (managerMetrics.booked || 0) + (managerMetrics.interested || 0);
 
-      const replyRateNum = emailsSent > 0 ? ((repliesCount / emailsSent) * 100) : 0;
-      const replyRate = replyRateNum.toFixed(1) + '%';
+      const lastActiveTime = sp.lastActive || sp.last_active;
+      const isOnline = Boolean(lastActiveTime && (Date.now() - new Date(lastActiveTime).getTime() < 5 * 60 * 1000));
 
-      const activeSession = await LoginSession.findOne({ userId: spId, lastHeartbeat: { $gte: fiveMinsAgo } }).lean();
+      const replyRate = emailsSent > 0 
+        ? `${((bookedCount / emailsSent) * 100).toFixed(1)}%` 
+        : '0.0%';
 
-      leaderboard.push({
-        _id: spId.toString(),
+      return {
+        _id: spId,
         name: sp.name,
         email: sp.email,
-        callsToday,
+        callsToday: callsCount,
         connectedCalls,
-        booked,
+        booked: bookedCount,
         emailsSent,
+        smsSent: userStats.smsToday || 0,
+        whatsappSent: userStats.whatsappToday || 0,
+        talkTimeSeconds: userStats.talkTimeToday || 0,
         replyRate,
-        isOnline: Boolean(activeSession)
-      });
-    }
+        isOnline,
+        status: isOnline ? 'Available' : 'Offline'
+      };
+    }));
 
-    // Sort descending by callsToday, then connectedCalls, then booked
-    leaderboard.sort((a, b) => b.callsToday - a.callsToday || b.connectedCalls - a.connectedCalls || b.booked - a.booked);
+    // Sort leaderboard by most active sales reps (booked desc, calls desc, emails desc)
+    leaderboard.sort((a, b) => (b.booked - a.booked) || (b.callsToday - a.callsToday) || (b.emailsSent - a.emailsSent));
 
     return NextResponse.json({
       success: true,

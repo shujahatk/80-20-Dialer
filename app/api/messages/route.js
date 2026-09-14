@@ -1,21 +1,23 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { requireAuth, canAccessResource } from '@/lib/middleware/authGuard';
 import { MessageStore, LeadStore, ActivityLogStore, SendingInboxStore } from '@/lib/store';
 import { sendSmsMessage } from '@/lib/twilioService';
 import { validatePhoneNumber } from '@/lib/phoneValidator';
+import { checkRateLimit } from '@/lib/rateLimiter';
+import { checkOperationalHours } from '@/lib/operationalHours';
+import { SuppressionStore } from '@/lib/suppression/suppressionStore';
 
 export async function POST(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized access.' },
-        { status: 401 }
-      );
-    }
+    const { user, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
+
+    const rateCheck = checkRateLimit(`sms_${user._id}`, 20, 60000);
+    if (!rateCheck.success) return rateCheck.errorResponse;
 
     const body = await req.json();
-    const { to, body: textBody, leadId } = body;
+    const { to, body: textBody, message, leadId } = body;
+    const content = textBody || message;
 
     const validation = validatePhoneNumber(to);
     if (!validation.isValid) {
@@ -25,7 +27,7 @@ export async function POST(req) {
       );
     }
 
-    if (!textBody || typeof textBody !== 'string' || textBody.trim() === '') {
+    if (!content || typeof content !== 'string' || content.trim() === '') {
       return NextResponse.json(
         { success: false, message: 'Message body cannot be empty.' },
         { status: 400 }
@@ -33,16 +35,51 @@ export async function POST(req) {
     }
 
     const recipientPhone = validation.formattedPhone;
-    const smsContent = textBody.trim();
+    const smsContent = content.trim();
 
+    // 1. Permanent DNC Suppression Check
+    const dncCheck = await SuppressionStore.isSuppressed({ phone: recipientPhone, channel: 'sms' });
+    if (dncCheck.suppressed) {
+      return NextResponse.json(
+        { success: false, message: 'Lead is on DNC/suppression list.' },
+        { status: 403 }
+      );
+    }
+
+    let leadTimezone = null;
     if (leadId) {
       const lead = await LeadStore.findById(leadId);
-      if (lead && lead.suppression?.sms) {
-        return NextResponse.json(
-          { success: false, message: 'SMS outreach is suppressed for this lead (DNC / Opt-Out).' },
-          { status: 400 }
-        );
+      if (lead) {
+        const leadOwner = lead.assignedTo || lead.assigned_to || lead.userId;
+        if (!canAccessResource(user, leadOwner)) {
+          return NextResponse.json(
+            { success: false, message: 'Forbidden. You do not have permission to message this lead.' },
+            { status: 403 }
+          );
+        }
+        if (lead.suppression?.sms || lead.suppression?.dnc || lead.coldOutreachStopped || lead.status === 'opted-out' || lead.status === 'dnc') {
+          return NextResponse.json(
+            { success: false, message: 'Lead is on DNC/suppression list.' },
+            { status: 403 }
+          );
+        }
+        if (lead.geography?.timezone) {
+          leadTimezone = lead.geography.timezone;
+        }
       }
+    }
+
+    // 2. Check operational hours constraints
+    const hoursCheck = await checkOperationalHours(leadTimezone);
+    if (!hoursCheck.allowed) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: hoursCheck.message,
+          operationalHours: hoursCheck
+        }, 
+        { status: 403 }
+      );
     }
 
     const hostUrl = process.env.PUBLIC_URL || `${req.headers.get('x-forwarded-proto') || 'http'}://${req.headers.get('host')}`;
@@ -89,22 +126,18 @@ export async function POST(req) {
       data: messageRecord
     }, { status: 201 });
   } catch (err) {
+    console.error('[Outbound Message Error]:', err.message);
     return NextResponse.json(
       { success: false, message: err.message || 'Server error occurred.' },
-      { status: 500 }
+      { status: err.statusCode || 500 }
     );
   }
 }
 
 export async function GET(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized access.' },
-        { status: 401 }
-      );
-    }
+    const { user, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const messages = await MessageStore.findByUserId(user._id);
     return NextResponse.json({

@@ -1,18 +1,15 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
-import { CallStore, LeadStore, SystemConfigStore } from '@/lib/store';
+import { requireAuth, canAccessResource } from '@/lib/middleware/authGuard';
+import { CallStore, LeadStore } from '@/lib/store';
 import { makeOutboundCall } from '@/lib/twilioService';
 import { validatePhoneNumber } from '@/lib/phoneValidator';
+import { checkOperationalHours } from '@/lib/operationalHours';
+import { SuppressionStore } from '@/lib/suppression/suppressionStore';
 
 export async function POST(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized access.' },
-        { status: 401 }
-      );
-    }
+    const { user, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const body = await req.json();
     const { to, leadId } = body;
@@ -27,39 +24,49 @@ export async function POST(req) {
 
     const recipientPhone = validation.formattedPhone;
 
-    // Check calling hours constraints
-    const config = await SystemConfigStore.getConfig();
-    const startHour = config.allowedHoursStart ?? 8;
-    const endHour = config.allowedHoursEnd ?? 18;
-    
-    let leadTimezone = 'UTC';
+    // 1. DNC Suppression Check
+    const dncCheck = await SuppressionStore.isSuppressed({ phone: recipientPhone, channel: 'call' });
+    if (dncCheck.suppressed) {
+      return NextResponse.json(
+        { success: false, message: 'Lead is on DNC/suppression list.' },
+        { status: 403 }
+      );
+    }
+
+    let leadTimezone = null;
     if (leadId) {
       const lead = await LeadStore.findById(leadId);
-      if (lead && lead.geography?.timezone) {
-        leadTimezone = lead.geography.timezone;
+      if (lead) {
+        const leadOwner = lead.assignedTo || lead.assigned_to || lead.userId;
+        if (!canAccessResource(user, leadOwner)) {
+          return NextResponse.json(
+            { success: false, message: 'Forbidden. You do not have permission to call this lead.' },
+            { status: 403 }
+          );
+        }
+        if (lead.suppression?.phone || lead.suppression?.dnc || lead.coldOutreachStopped || lead.status === 'opted-out' || lead.status === 'dnc') {
+          return NextResponse.json(
+            { success: false, message: 'Lead is on DNC/suppression list.' },
+            { status: 403 }
+          );
+        }
+        if (lead.geography?.timezone) {
+          leadTimezone = lead.geography.timezone;
+        }
       }
     }
 
-    // Checking current hour in lead's timezone
-    try {
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        timeZone: leadTimezone,
-        hour: 'numeric',
-        hour12: false
-      });
-      const nowHour = parseInt(formatter.format(new Date()), 10);
-      
-      if (nowHour < startHour || nowHour >= endHour) {
-        return NextResponse.json(
-          { 
-            success: false, 
-            message: `Outside allowed calling hours (${startHour}:00 - ${endHour}:00). Current hour in lead's timezone (${leadTimezone}) is ${nowHour}:00.` 
-          }, 
-          { status: 403 }
-        );
-      }
-    } catch (tzErr) {
-      console.warn(`Timezone check failed for timezone: ${leadTimezone}, defaulting to allow.`);
+    // 2. Check operational hours constraints
+    const hoursCheck = await checkOperationalHours(leadTimezone);
+    if (!hoursCheck.allowed) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: hoursCheck.message,
+          operationalHours: hoursCheck
+        }, 
+        { status: 403 }
+      );
     }
 
     const hostUrl = process.env.PUBLIC_URL || `${req.headers.get('x-forwarded-proto') || 'http'}://${req.headers.get('host')}`;
@@ -70,10 +77,12 @@ export async function POST(req) {
 
     const callRecord = await CallStore.create({
       userId: user._id,
+      leadId: leadId || null,
       callSid: callResult.callSid,
       from: callResult.from,
       to: callResult.to,
       status: callResult.status,
+      direction: 'outbound',
       startTime: new Date()
     });
 
@@ -83,22 +92,18 @@ export async function POST(req) {
       data: callRecord
     }, { status: 201 });
   } catch (err) {
+    console.error('[Outbound Call Error]:', err.message);
     return NextResponse.json(
-      { success: false, message: err.message || 'Server error occurred.' },
-      { status: 500 }
+      { success: false, message: err.message || 'Server error occurred while placing call.' },
+      { status: err.statusCode || 500 }
     );
   }
 }
 
 export async function GET(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized access.' },
-        { status: 401 }
-      );
-    }
+    const { user, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const calls = await CallStore.findByUserId(user._id);
     return NextResponse.json({

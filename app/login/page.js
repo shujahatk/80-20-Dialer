@@ -9,7 +9,31 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [sendingForgot, setSendingForgot] = useState(false);
+  const [forgotMsg, setForgotMsg] = useState(null);
   const router = useRouter();
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setSendingForgot(true);
+    setForgotMsg(null);
+
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail })
+      });
+      const data = await res.json();
+      setForgotMsg({ type: 'success', text: data.message || 'Password reset link sent to your email.' });
+    } catch (err) {
+      setForgotMsg({ type: 'error', text: err.message || 'Failed to request reset link.' });
+    } finally {
+      setSendingForgot(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -92,6 +116,13 @@ export default function Login() {
                 <label className="block text-slate-300 text-xs font-semibold uppercase tracking-wider">
                   Password
                 </label>
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(true)}
+                  className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors font-medium cursor-pointer"
+                >
+                  Forgot password?
+                </button>
               </div>
               <input
                 type="password"
@@ -106,7 +137,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-4 px-4 bg-gradient-to-r from-cyan-500 to-indigo-500 hover:from-cyan-400 hover:to-indigo-400 text-white font-semibold rounded-2xl shadow-lg shadow-cyan-500/20 focus:outline-none transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed transform hover:-translate-y-0.5 active:translate-y-0"
+              className="w-full py-4 px-4 bg-gradient-to-r from-cyan-500 to-indigo-500 hover:from-cyan-400 hover:to-indigo-400 text-white font-semibold rounded-2xl shadow-lg shadow-cyan-500/20 focus:outline-none transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
@@ -126,6 +157,58 @@ export default function Login() {
             </Link>
           </div>
         </div>
+
+        {/* FORGOT PASSWORD MODAL */}
+        {showForgotModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fade-in">
+            <div className="bg-[#121624] border border-white/10 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Reset Account Password</h3>
+                <button onClick={() => { setShowForgotModal(false); setForgotMsg(null); }} className="text-slate-400 hover:text-white font-bold">✕</button>
+              </div>
+
+              <p className="text-xs text-slate-400">
+                Enter your account email address. We will dispatch a secure 15-minute password reset link.
+              </p>
+
+              {forgotMsg && (
+                <div className={`p-3 rounded-xl text-xs ${
+                  forgotMsg.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300' : 'bg-red-500/10 border border-red-500/30 text-red-400'
+                }`}>
+                  {forgotMsg.text}
+                </div>
+              )}
+
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <input
+                  type="email"
+                  required
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  placeholder="name@company.com"
+                  className="w-full bg-[#080b12] border border-white/10 focus:border-cyan-500 rounded-xl p-3 text-xs text-white placeholder:text-slate-600 focus:outline-none"
+                />
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowForgotModal(false); setForgotMsg(null); }}
+                    className="px-3 py-2 text-xs text-slate-400 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={sendingForgot || !forgotEmail}
+                    className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl shadow-md shadow-cyan-500/20"
+                  >
+                    {sendingForgot ? 'Sending...' : 'Send Reset Link'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

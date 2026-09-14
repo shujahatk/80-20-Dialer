@@ -1,10 +1,16 @@
-import { NextResponse } from 'next/server';
-import { requireAuth, canAccessResource } from '@/lib/middleware/authGuard';
-import { connectDB } from '@/lib/db';
-import BlastCampaign from '@/models/BlastCampaign';
-import Lead from '@/models/Lead';
-import SendingInbox from '@/models/SendingInbox';
-import { logAuditEvent } from '@/lib/auditLogger';
+import { NextResponse } from 'next/server.js';
+import { requireAuth, canAccessResource } from '../../../../lib/middleware/authGuard.js';
+import { connectDB } from '../../../../lib/db.js';
+import BlastCampaign from '../../../../models/BlastCampaign.js';
+import Lead from '../../../../models/Lead.js';
+import SendingInbox from '../../../../models/SendingInbox.js';
+import { logAuditEvent } from '../../../../lib/auditLogger.js';
+import { LeadStore, BlastCampaignStore } from '../../../../lib/store.js';
+import { SuppressionStore } from '../../../../lib/suppression/suppressionStore.js';
+
+
+
+
 
 export async function GET(req) {
   try {
@@ -80,39 +86,70 @@ export async function POST(req) {
       );
     }
 
-    if (leadIds.length > 5000) {
+    const isManager = ['owner', 'admin', 'manager'].includes(user.role);
+
+    // Salesperson batch limits vs manager batch limits
+    const maxBatchLimit = isManager ? 5000 : 500;
+    if (leadIds.length > maxBatchLimit) {
       return NextResponse.json(
-        { success: false, error: { code: 'LIMIT_EXCEEDED', message: 'Campaign cannot exceed 5,000 leads per batch.' } },
+        {
+          success: false,
+          error: {
+            code: 'LIMIT_EXCEEDED',
+            message: `Campaign cannot exceed ${maxBatchLimit} leads for your role (${user.role}).`
+          }
+        },
         { status: 400 }
       );
     }
 
-    // Verify Lead Ownership: Salespeople can ONLY send blasts to leads assigned to them or unassigned
-    const isManager = ['owner', 'admin', 'manager'].includes(user.role);
-    const validLeads = await Lead.find({ _id: { $in: leadIds } }).select('_id assignedTo contact suppression').lean();
-
+    // Role-based Campaign Permissions:
+    // Salespeople can create draft campaigns or send campaigns targeting only leads assigned directly to them.
+    // Managers/Admins can send teamwide blasts.
     const authorizedLeadIds = [];
     let suppressedCount = 0;
+    const userIdStr = String(user._id || user.id);
 
-    for (const lead of validLeads) {
-      // Check ownership
-      if (!isManager && lead.assignedTo && lead.assignedTo.toString() !== user._id.toString()) {
-        continue; // Exclude lead not assigned to salesperson
+    for (const id of leadIds) {
+      const lead = await LeadStore.findById(id);
+      if (!lead) continue;
+
+      const leadOwner = lead.assignedTo || lead.assigned_to || lead.userId;
+
+      // Ownership Scope Check: Salespeople cannot blast leads assigned to others or unassigned pool
+      if (!isManager) {
+        if (!leadOwner || String(leadOwner) !== userIdStr) {
+          continue; // Block unassigned or other rep's leads from salesperson blast
+        }
       }
 
-      // Check suppression
-      const isSuppressed = type === 'email' ? lead.suppression?.email : lead.suppression?.sms;
-      if (isSuppressed) {
+      // Check permanent suppression table
+      const email = lead.contact?.email || lead.email;
+      const phone = lead.contact?.phone || lead.phone;
+      const suppCheck = await SuppressionStore.isSuppressed({
+        email,
+        phone,
+        channel: type === 'email' ? 'email' : 'sms'
+      });
+
+      const leadSuppressed = suppCheck.suppressed || (type === 'email' ? lead.suppression?.email : lead.suppression?.sms);
+      if (leadSuppressed) {
         suppressedCount++;
         continue;
       }
 
-      authorizedLeadIds.push(lead._id);
+      authorizedLeadIds.push(lead._id || lead.id);
     }
 
     if (authorizedLeadIds.length === 0) {
       return NextResponse.json(
-        { success: false, error: { code: 'NO_ELIGIBLE_LEADS', message: 'No eligible or authorized leads found for this campaign.' } },
+        {
+          success: false,
+          error: {
+            code: 'NO_ELIGIBLE_LEADS',
+            message: 'No eligible or authorized leads found for this campaign. Verify lead assignment and suppression status.'
+          }
+        },
         { status: 400 }
       );
     }
@@ -120,23 +157,25 @@ export async function POST(req) {
     // Verify Inbox Authorization
     let inboxObjId = 'default';
     if (sendingInboxId !== 'default') {
-      const inbox = await SendingInbox.findById(sendingInboxId).lean();
-      if (!inbox || inbox.status !== 'active') {
-        return NextResponse.json(
-          { success: false, error: { code: 'INVALID_INBOX', message: 'Selected sending inbox is inactive or invalid.' } },
-          { status: 400 }
-        );
-      }
-      inboxObjId = inbox._id.toString();
+      try {
+        const inbox = await SendingInbox.findById(sendingInboxId).lean();
+        if (!inbox || inbox.status !== 'active') {
+          return NextResponse.json(
+            { success: false, error: { code: 'INVALID_INBOX', message: 'Selected sending inbox is inactive or invalid.' } },
+            { status: 400 }
+          );
+        }
+        inboxObjId = inbox._id.toString();
+      } catch (e) {}
     }
 
     const initialStatus = ['queued', 'draft'].includes(status) ? status : 'queued';
 
-    const campaign = await BlastCampaign.create({
+    const campaign = await BlastCampaignStore.create({
       name: name.trim(),
       description: description.trim(),
       type,
-      createdBy: user._id,
+      createdBy: user._id || user.id,
       sendingInboxId: inboxObjId,
       templateSubject: type === 'email' ? templateSubject.trim() : '',
       templateBody: templateBody.trim(),
@@ -152,6 +191,7 @@ export async function POST(req) {
         skipped: suppressedCount
       }
     });
+
 
     await logAuditEvent({
       userId: user._id,

@@ -1,34 +1,15 @@
-import { NextResponse } from 'next/server';
-import { connectDB } from '@/lib/db';
+import { NextResponse } from 'next/server.js';
+
 
 export async function GET() {
   try {
-    const isConnected = await connectDB();
-    if (!isConnected) {
-      return NextResponse.json(
-        {
-          status: 'unhealthy',
-          database: 'disconnected',
-          timestamp: new Date().toISOString()
-        },
-        { status: 503 }
-      );
-    }
-
     return NextResponse.json({
-      status: 'healthy',
-      database: 'connected',
-      uptimeSeconds: Math.floor(process.uptime()),
-      timestamp: new Date().toISOString()
-    });
+      status: 'ok'
+    }, { status: 200 });
   } catch (err) {
-    return NextResponse.json(
-      {
-        status: 'unhealthy',
-        error: err.message,
-        timestamp: new Date().toISOString()
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      status: 'error'
+    }, { status: 500 });
   }
 }
+

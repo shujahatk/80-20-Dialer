@@ -1,4 +1,5 @@
 import { MessageStore, LeadStore, ActivityLogStore } from '@/lib/store';
+import { validateTwilioWebhook } from '@/lib/webhookValidator.js';
 
 export async function POST(req) {
   try {
@@ -12,6 +13,11 @@ export async function POST(req) {
       }
     } else {
       body = await req.json();
+    }
+
+    if (!validateTwilioWebhook(req, body)) {
+      console.warn('[Inbound WhatsApp Webhook]: Unauthorized Twilio signature rejected.');
+      return new Response('Unauthorized Webhook Signature', { status: 401 });
     }
 
     const { From, Body, MessageSid, To } = body;
