@@ -364,6 +364,12 @@ export default function LeadManagementHub() {
         showNotification(`🎉 Successfully imported ${res.data?.importedCount || 0} leads!`, 'success');
         setPreviewData(null);
         setSelectedFile(null);
+        // Navigate user to the tab where the imported leads reside
+        if (uploadAssigneeId && uploadAssigneeId !== 'pool') {
+          setActiveTab('all');
+        } else {
+          setActiveTab('unassigned');
+        }
         fetchData();
       }
     } catch (err) {
