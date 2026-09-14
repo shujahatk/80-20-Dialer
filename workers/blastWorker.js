@@ -1,249 +1,151 @@
-import { BlastCampaignStore, LeadStore, MessageStore, ActivityLogStore, UserStore } from '../lib/store.js';
+import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { BlastCampaignStore, LeadStore, MessageStore, ActivityLogStore, UserStore, SendingInboxStore } from '../lib/store.js';
 import { SuppressionStore } from '../lib/suppression/suppressionStore.js';
-import { sendEmail } from '../lib/emailService.js';
+import { prepareEmail, sendEmail } from '../lib/emailService.js';
 import { sendBlastSms } from '../lib/sms/sendBlastSms.js';
+import { getSupabaseClient, queryResult } from '../lib/supabase.js';
 
-const POLL_INTERVAL_MS = 5000;
-const STALE_RESERVATION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-let isWorkerRunning = false;
-
-/**
- * Recovers any recipients stuck in 'processing' state due to worker restart or crash
- */
-export async function recoverStaleReservations(campaign) {
-  if (!campaign || !Array.isArray(campaign.recipients)) return;
-  const now = Date.now();
-  let modified = false;
-
-  for (const r of campaign.recipients) {
-    if (r.status === 'processing' && r.reserved_at) {
-      const reservedTime = new Date(r.reserved_at).getTime();
-      if (now - reservedTime > STALE_RESERVATION_TIMEOUT_MS) {
-        console.warn(`[Blast Worker] Recovering stale reservation for lead ${r.lead_id} in campaign ${campaign._id || campaign.id}`);
-        r.status = 'pending';
-        r.attempt_count = (r.attempt_count || 0) + 1;
-        r.last_error = 'Stale reservation recovered after worker crash';
-        modified = true;
-      }
+const workerId = randomUUID();
+let running = false;
+const now = () => new Date().toISOString();
+const escapeHtml = value => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+export function recipientStats(recipients, excluded = 0) {
+  return { total: recipients.length + excluded, eligible: recipients.length,
+    sent: recipients.filter(recipient => recipient.status === 'sent').length,
+    failed: recipients.filter(recipient => recipient.status === 'failed').length,
+    skipped: excluded + recipients.filter(recipient => recipient.status === 'skipped').length,
+    unknown: recipients.filter(recipient => recipient.status === 'unknown').length };
+}
+export function recoverStaleReservations(campaign) {
+  for (const recipient of campaign.recipients || []) {
+    if (recipient.status !== 'processing') continue;
+    const age = Date.now() - new Date(recipient.first_attempt_at || recipient.reserved_at || 0).getTime();
+    if (campaign.type === 'email' && recipient.dispatch_payload && age < 23 * 60 * 60 * 1000) {
+      recipient.status = 'pending';
+    } else {
+      recipient.status = 'unknown';
+      recipient.last_error = 'Delivery may have occurred before the worker stopped; reconcile with the provider before resending.';
     }
   }
-
-  if (modified) {
-    await BlastCampaignStore.update(campaign._id || campaign.id, {
-      recipients: campaign.recipients
-    });
-  }
 }
-
-export async function processQueuedCampaigns() {
-  if (isWorkerRunning) return;
-  isWorkerRunning = true;
-
+export async function processSingleCampaign(campaign, owner = workerId) {
+  const id = campaign.id || campaign._id;
+  const recipients = campaign.recipients || [];
+  const excluded = campaign.excludedCount || 0;
+  const save = terminal => BlastCampaignStore.checkpoint(id, owner, { recipients, stats: recipientStats(recipients, excluded),
+    ...(terminal ? { completedAt: now() } : {}) }, terminal || null);
   try {
-    const allCampaigns = await BlastCampaignStore.findAll();
-    const activeCampaigns = allCampaigns.filter(c => c.status === 'queued' || c.status === 'processing');
-
-    for (const campaign of activeCampaigns.slice(0, 5)) {
-      await processSingleCampaign(campaign._id || campaign.id);
-    }
-  } catch (err) {
-    console.error('[Blast Worker] Error processing queue:', err.message);
-  } finally {
-    isWorkerRunning = false;
-  }
-}
-
-async function processSingleCampaign(campaignId) {
-  const campaign = await BlastCampaignStore.findById(campaignId);
-  if (!campaign || !['queued', 'processing'].includes(campaign.status)) return;
-
-  console.log(`[Blast Worker] Starting async campaign execution: ${campaign.name} (${campaignId})`);
-
-  // Crash recovery check for stale reservations
-  await recoverStaleReservations(campaign);
-
-  // Mark status as processing
-  await BlastCampaignStore.update(campaignId, { status: 'processing' });
-
-  const { type = 'email', templateSubject = '', templateBody = '', leadIds = [], createdBy } = campaign;
-  const sender = (await UserStore.findById(createdBy)) || { name: 'Outbound Team', email: 'outreach@8020acquisition.com' };
-
-  let sentCount = campaign.stats?.sent || 0;
-  let failedCount = campaign.stats?.failed || 0;
-  let skippedCount = campaign.stats?.skipped || 0;
-
-  // Initialize or load persistent recipient state
-  let recipients = Array.isArray(campaign.recipients) && campaign.recipients.length > 0 
-    ? [...campaign.recipients]
-    : leadIds.map(leadId => ({
-        id: `rcpt_${campaignId}_${leadId}`,
-        campaign_id: String(campaignId),
-        lead_id: String(leadId),
-        status: 'pending',
-        idempotency_key: `${campaignId}_${leadId}_v1`,
-        provider_message_id: null,
-        attempt_count: 0,
-        reserved_at: null,
-        sent_at: null,
-        failed_at: null,
-        last_error: null
-      }));
-
-  for (let i = 0; i < recipients.length; i++) {
-    const recipient = recipients[i];
-    const leadId = recipient.lead_id;
-
-    // Skip already completed recipients
-    if (['sent', 'skipped'].includes(recipient.status)) {
-      continue;
-    }
-
-    // Step 7.6: Re-check campaign pause / cancellation immediately before dispatch
-    const currentCampaign = await BlastCampaignStore.findById(campaignId);
-    if (!currentCampaign || currentCampaign.status === 'cancelled' || currentCampaign.status === 'paused') {
-      console.log(`[Blast Worker] Campaign ${campaignId} was ${currentCampaign?.status || 'cancelled'}. Halting worker.`);
-      await BlastCampaignStore.update(campaignId, {
-        recipients,
-        stats: { total: recipients.length, sent: sentCount, failed: failedCount, skipped: skippedCount }
-      });
-      return;
-    }
-
-    // Step 7.4: Atomic reservation
-    recipient.status = 'processing';
-    recipient.reserved_at = new Date().toISOString();
-    recipient.attempt_count = (recipient.attempt_count || 0) + 1;
-
-    const lead = await LeadStore.findById(leadId);
-    if (!lead) {
-      skippedCount++;
-      recipient.status = 'failed';
-      recipient.failed_at = new Date().toISOString();
-      recipient.last_error = 'Lead not found';
-      continue;
-    }
-
-    const email = lead.contact?.email || lead.email;
-    const phone = lead.contact?.phone || lead.phone;
-
-    // Permanent suppression check (Step 3.3 & Step 7.4)
-    const suppCheck = await SuppressionStore.isSuppressed({
-      email,
-      phone,
-      channel: type === 'email' ? 'email' : 'sms'
-    });
-
-    const isSuppressed = suppCheck.suppressed || (type === 'email' ? lead.suppression?.email : lead.suppression?.sms);
-
-    if (isSuppressed || (type === 'email' && (!email || !email.includes('@')))) {
-      skippedCount++;
-      recipient.status = 'skipped';
-      recipient.last_error = isSuppressed ? 'Suppressed (DNC)' : 'Missing valid email';
-      continue;
-    }
-
-    const firstName = lead.contact?.name?.split(' ')[0] || lead.name?.split(' ')[0] || 'there';
-    const company = lead.company?.name || (typeof lead.company === 'string' ? lead.company : 'your team');
-    const industry = lead.industry || lead.niche || 'business';
-
-    const personalizedSubject = templateSubject
-      .replace(/{{firstName}}/g, firstName)
-      .replace(/{{company}}/g, company)
-      .replace(/{{industry}}/g, industry);
-
-    const personalizedBody = templateBody
-      .replace(/{{firstName}}/g, firstName)
-      .replace(/{{company}}/g, company)
-      .replace(/{{industry}}/g, industry);
-
-    try {
-      if (type === 'email') {
-        const sendResult = await sendEmail({
-          to: email,
-          subject: personalizedSubject,
-          html: `<div style="font-family: Arial, sans-serif; color: #1e293b; line-height: 1.6; white-space: pre-wrap;">${personalizedBody}</div>`,
-          fromName: sender.name || 'Sales Team',
-          fromEmail: sender.email || 'outreach@8020acquisition.com',
-          headers: {
-            'X-Idempotency-Key': recipient.idempotency_key
-          }
-        });
-
-        if (sendResult.success) {
-          sentCount++;
-          recipient.status = 'sent';
-          recipient.sent_at = new Date().toISOString();
-          recipient.provider_message_id = sendResult.id || `msg_${Date.now()}`;
-
-          await MessageStore.create({
-            userId: sender._id || sender.id,
-            leadId,
-            messageSid: recipient.provider_message_id,
-            from: `${sender.name || 'Sales Team'} <${sender.email || 'outreach@8020acquisition.com'}>`,
-            to: email,
-            body: personalizedBody,
-            status: 'sent',
-            channel: 'email',
-            direction: 'outbound'
-          });
-
-          await LeadStore.updateStage(leadId, 'CONTACTED', `Async Blast: ${campaign.name}`);
-          await ActivityLogStore.create({
-            leadId,
-            userId: sender._id || sender.id,
-            action: 'email',
-            channel: 'email',
-            direction: 'outbound',
-            outcome: 'sent',
-            notes: `Dispatched in async campaign "${campaign.name}"\nSubject: ${personalizedSubject}`,
-            messageSid: recipient.provider_message_id
-          });
-        } else {
-          failedCount++;
-          recipient.status = 'failed';
-          recipient.failed_at = new Date().toISOString();
-          recipient.last_error = sendResult.error || 'Provider dispatch error';
-        }
-      } else {
-        // SMS blast
-        const smsResult = await sendBlastSms({ to: phone, body: personalizedBody, leadId });
-        if (smsResult.success) {
-          sentCount++;
-          recipient.status = 'sent';
-          recipient.sent_at = new Date().toISOString();
-          recipient.provider_message_id = smsResult.sid || `sms_${Date.now()}`;
-        } else {
-          failedCount++;
-          recipient.status = 'failed';
-          recipient.failed_at = new Date().toISOString();
-          recipient.last_error = smsResult.error || 'SMS dispatch failed';
-        }
+    recoverStaleReservations(campaign);
+    let current = await save();
+    if (current.status !== 'processing') return;
+    const sender = await UserStore.findById(campaign.createdBy);
+    const inbox = campaign.sendingInboxId && campaign.sendingInboxId !== 'default'
+      ? await SendingInboxStore.findInboxById(campaign.sendingInboxId) : null;
+    for (const recipient of recipients) {
+      if (recipient.status !== 'pending') continue;
+      if (recipient.retry_at && new Date(recipient.retry_at) > new Date()) continue;
+      current = await save();
+      if (current.status !== 'processing') return;
+      if (!sender || sender.approved !== true || sender.active !== true) {
+        recipient.status = 'skipped'; recipient.last_error = 'Sender account disabled or not approved'; await save(); continue;
       }
-    } catch (e) {
-      failedCount++;
-      recipient.status = 'failed';
-      recipient.failed_at = new Date().toISOString();
-      recipient.last_error = e.message;
+      if (campaign.sendingInboxId !== 'default' && campaign.sendingInboxId && (!inbox || inbox.active === false)) {
+        recipient.status = 'skipped'; recipient.last_error = 'Sending inbox unavailable'; await save(); continue;
+      }
+      const lead = await LeadStore.findById(recipient.lead_id);
+      if (!lead) { recipient.status = 'skipped'; recipient.last_error = 'Lead deleted or missing'; await save(); continue; }
+      const manager = ['owner', 'manager', 'admin'].includes(sender.role);
+      if (inbox && !manager && String(inbox.createdBy || inbox.userId || '') !== String(sender.id) && !(inbox.assignedUsers || []).map(String).includes(String(sender.id))) {
+        recipient.status = 'skipped'; recipient.last_error = 'Sending inbox authorization revoked'; await save(); continue;
+      }
+      if (!manager && String(lead.assigned_to || '') !== String(sender.id)) {
+        recipient.status = 'skipped'; recipient.last_error = 'Lead is no longer assigned to sender'; await save(); continue;
+      }
+      const email = lead.contact?.email || lead.email;
+      const phone = lead.contact?.phone || lead.phone;
+      const channel = campaign.type === 'sms' ? 'sms' : 'email';
+      const suppressed = await SuppressionStore.isSuppressed({ email, phone, channel });
+      if (suppressed.suppressed || lead.suppression?.[channel] || ['do_not_contact', 'opted-out'].includes(String(lead.status).toLowerCase())) {
+        recipient.status = 'skipped'; recipient.last_error = 'Suppressed'; await save(); continue;
+      }
+      if ((channel === 'email' && !email?.includes('@')) || (channel === 'sms' && !phone)) {
+        recipient.status = 'skipped'; recipient.last_error = 'Missing recipient address'; await save(); continue;
+      }
+      const firstName = (lead.contact?.name || lead.name || 'there').split(' ')[0];
+      const company = typeof lead.company === 'string' ? lead.company : lead.company?.name || 'your team';
+      const replace = value => (value || '').replace(/{{firstName}}/g, firstName).replace(/{{company}}/g, company).replace(/{{industry}}/g, lead.industry || lead.niche || 'business');
+      const body = replace(campaign.templateBody);
+      // Save the exact request before dispatch so a Resend retry has an identical payload.
+      recipient.dispatch_payload ||= channel === 'email' ? prepareEmail({ to: email, subject: replace(campaign.templateSubject),
+        html: `<div style="white-space: pre-wrap">${escapeHtml(body)}</div>`, fromEmail: inbox?.fromEmail || sender.email, fromName: inbox?.fromName || sender.name })
+        : { to: phone, body };
+      recipient.first_attempt_at ||= now();
+      if (Date.now() - new Date(recipient.first_attempt_at).getTime() >= 23 * 3600000 || recipient.attempt_count >= 3) {
+        recipient.status = 'unknown'; recipient.last_error = 'Safe retry window or attempt limit exceeded; provider reconciliation required'; await save(); continue;
+      }
+      // Suppression also applies to the original address of an immutable retry request.
+      const destination = channel === 'email' ? recipient.dispatch_payload.to[0] : recipient.dispatch_payload.to;
+      const originalSuppression = await SuppressionStore.isSuppressed({ [channel === 'email' ? 'email' : 'phone']: destination, channel });
+      if (originalSuppression.suppressed) { recipient.status = 'skipped'; recipient.last_error = 'Original recipient suppressed'; await save(); continue; }
+      recipient.status = 'processing'; recipient.reserved_at = now(); recipient.attempt_count = (recipient.attempt_count || 0) + 1;
+      current = await save();
+      if (current.status !== 'processing') { recipient.status = 'pending'; await save(); return; }
+      let result;
+      try {
+        result = channel === 'email' ? await sendEmail({ preparedPayload: recipient.dispatch_payload, idempotencyKey: recipient.idempotency_key })
+          : await sendBlastSms(recipient.dispatch_payload);
+      } catch (error) {
+        recipient.last_error = error.message;
+        if (error.definitive) recipient.status = 'failed';
+        else if (channel === 'email') { recipient.status = 'pending'; recipient.retry_at = new Date(Date.now() + 60000).toISOString(); }
+        else recipient.status = 'unknown';
+        await save();
+        continue;
+      }
+      recipient.status = 'sent'; recipient.sent_at = now(); recipient.provider_message_id = result.id || result.sid;
+      // Provider success is durable before logging; logging failure must never resend it.
+      await save();
+      try {
+        await MessageStore.create({ userId: sender.id, leadId: lead.id, blastCampaignId: id, messageSid: recipient.provider_message_id,
+          from: channel === 'email' ? recipient.dispatch_payload.from : process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_PHONE_NUMBER, to: destination,
+          body: channel === 'email' ? recipient.dispatch_payload.html : recipient.dispatch_payload.body, status: 'sent', channel, direction: 'outbound' });
+        await LeadStore.updateStage(lead.id, 'CONTACTED', `Blast: ${campaign.name}`);
+        await ActivityLogStore.create({ userId: sender.id, leadId: lead.id, action: channel, channel, outcome: 'sent', messageSid: recipient.provider_message_id, notes: `Blast: ${campaign.name}` });
+      } catch (error) { recipient.log_error = error.message; await save(); }
     }
-  }
-
-  const finalStatus = failedCount === recipients.length && sentCount === 0 ? 'failed' : 'completed';
-  await BlastCampaignStore.update(campaignId, {
-    status: finalStatus,
-    recipients,
-    completedAt: new Date().toISOString(),
-    stats: {
-      total: recipients.length,
-      sent: sentCount,
-      failed: failedCount,
-      skipped: skippedCount
-    }
-  });
-
-  console.log(`[Blast Worker] Finished campaign ${campaignId}: ${sentCount} sent, ${failedCount} failed, ${skippedCount} skipped.`);
+    if (recipients.some(recipient => recipient.status === 'pending')) { await save(); return; }
+    const stats = recipientStats(recipients, excluded);
+    await save(stats.unknown ? 'needs_review' : stats.failed && !stats.sent ? 'failed' : 'completed');
+  } finally { await BlastCampaignStore.release(id, owner); }
 }
-
-// Background scheduler
-if (typeof setInterval !== 'undefined') {
-  setInterval(processQueuedCampaigns, POLL_INTERVAL_MS);
+export async function processQueuedCampaigns() {
+  if (running) return;
+  running = true;
+  try {
+    await queryResult(getSupabaseClient().from('worker_health').upsert({ id: workerId, heartbeat_at: now() }));
+    // One campaign per poll keeps heartbeat freshness independent of queue length.
+    const campaign = await BlastCampaignStore.claim(workerId);
+    if (campaign) await processSingleCampaign(campaign);
+  } finally { running = false; }
+}
+export async function startWorker() {
+  let stopped = false;
+  const heartbeat = setInterval(() => {
+    queryResult(getSupabaseClient().from('worker_health').upsert({ id: workerId, heartbeat_at: now() }))
+      .catch(error => console.error('[Worker heartbeat]', error.message));
+  }, 15000);
+  process.once('SIGINT', () => { stopped = true; });
+  process.once('SIGTERM', () => { stopped = true; });
+  try {
+    while (!stopped) {
+      try { await processQueuedCampaigns(); } catch (error) { console.error('[Blast worker]', error.message); }
+      if (!stopped) await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  } finally { clearInterval(heartbeat); }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const nextEnv = await import('@next/env');
+  (nextEnv.loadEnvConfig || nextEnv.default.loadEnvConfig)(process.cwd());
+  await startWorker();
 }

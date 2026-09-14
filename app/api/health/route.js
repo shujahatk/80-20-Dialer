@@ -1,15 +1,6 @@
-import { NextResponse } from 'next/server.js';
-
-
+import { NextResponse } from 'next/server';
+import { getSystemHealth } from '@/lib/systemHealth';
 export async function GET() {
-  try {
-    return NextResponse.json({
-      status: 'ok'
-    }, { status: 200 });
-  } catch (err) {
-    return NextResponse.json({
-      status: 'error'
-    }, { status: 500 });
-  }
+  const health = await getSystemHealth();
+  return NextResponse.json(health, { status: health.status === 'ok' ? 200 : 503, headers: { 'Cache-Control': 'no-store' } });
 }
-

@@ -1,20 +1,26 @@
+
+if (process.env.ALLOW_LEGACY_INTEGRATION_TESTS !== '1' || !process.env.TEST_SUPABASE_URL || !process.env.TEST_SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('Legacy integration scripts mutate records and may send messages. Use an isolated test Supabase project with TEST_SUPABASE_URL, TEST_SUPABASE_SERVICE_ROLE_KEY, and ALLOW_LEGACY_INTEGRATION_TESTS=1. npm test runs isolated regression tests.');
+}
+process.env.SUPABASE_URL = process.env.TEST_SUPABASE_URL;
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.TEST_SUPABASE_SERVICE_ROLE_KEY;
 import jwt from 'jsonwebtoken';
 import { generateAccessToken, generateToken, verifyToken } from '../lib/auth.js';
 import { UserStore } from '../lib/store.js';
-import { 
-  canAccessResource, 
-  assertLeadAccess, 
-  assertDraftAccess, 
-  assertCampaignAccess, 
-  assertStatsAccess, 
-  requireAuth, 
-  requireManager, 
-  ROLES 
+import {
+  canAccessResource,
+  assertLeadAccess,
+  assertDraftAccess,
+  assertCampaignAccess,
+  assertStatsAccess,
+  requireAuth,
+  requireManager,
+  ROLES
 } from '../lib/middleware/authGuard.js';
-import { 
-  validateTwilioSignature, 
-  validateResendSignature, 
-  validateListmonkSignature 
+import {
+  validateTwilioSignature,
+  validateResendSignature,
+  validateListmonkSignature
 } from '../lib/security/webhookSecurity.js';
 import crypto from 'crypto';
 
@@ -202,7 +208,7 @@ async function runTestSuite() {
   const twilioAuthToken = 'twilio_auth_token_secret_987';
   const twilioUrl = 'https://outbound.8020acquisition.com/api/voice/status';
   const twilioParams = { CallSid: 'CA123456789', CallStatus: 'completed' };
-  
+
   let twilioData = twilioUrl;
   Object.keys(twilioParams).sort().forEach(k => { twilioData += `${k}${twilioParams[k]}`; });
   const validTwilioSig = crypto.createHmac('sha1', twilioAuthToken).update(twilioData, 'utf8').digest('base64');

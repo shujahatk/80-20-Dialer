@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiRequest } from '@/lib/apiClient';
@@ -79,7 +81,7 @@ export default function Workstation() {
   const [activeConnection, setActiveConnection] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [callSid, setCallSid] = useState('');
-  
+
   // Dialer / Communications Forms
   const [activeChannel, setActiveChannel] = useState('sms'); // 'sms' | 'whatsapp' | 'email'
   const [smsText, setSmsText] = useState('');
@@ -147,19 +149,19 @@ export default function Workstation() {
   const deviceRef = useRef(null);
 
   // Initialize
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     setIsMounted(true);
     const localUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
-    
+
     if (!localUser || !token) {
       router.push('/login');
       return;
     }
-    
-    const parsedUser = JSON.parse(localUser);
+
+    const parsedUser = sessionUser;
     setUser(parsedUser);
-    
+
     // Initial fetches
     fetchQueue();
     fetchStats();
@@ -195,12 +197,12 @@ export default function Workstation() {
       }, 1000);
     } else {
       if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-      setCallDuration(0);
+
     }
   }, [callStatus]);
 
   // Load Twilio SDK
-  const loadTwilioScript = () => {
+  function loadTwilioScript() {
     return new Promise((resolve) => {
       if (window.Twilio) {
         resolve(true);
@@ -212,10 +214,10 @@ export default function Workstation() {
       script.onload = () => resolve(true);
       document.body.appendChild(script);
     });
-  };
+  }
 
   // Initialize Twilio Device
-  const initializeTwilioDevice = async () => {
+  async function initializeTwilioDevice() {
     try {
       const res = await apiRequest('/api/calls/token');
       if (!res.success || !res.token) {
@@ -251,7 +253,8 @@ export default function Workstation() {
       device.on('connect', (conn) => {
         console.log('[Twilio Device]: Call connected');
         setActiveConnection(conn);
-        setCallStatus('active');
+        setCallDuration(0);
+          setCallStatus('active');
         const twilioSid = conn?.parameters?.CallSid || conn?.customParameters?.get?.('CallSid') || '';
         setCallSid(twilioSid);
       });
@@ -295,10 +298,10 @@ export default function Workstation() {
       console.warn('Could not initialize Twilio device:', e.message);
       setCallStatus('ready');
     }
-  };
+  }
 
   // Heartbeat & Sync stats
-  const sendHeartbeat = async () => {
+  async function sendHeartbeat() {
     try {
       const res = await apiRequest('/api/session/heartbeat', 'POST');
       if (res.success) {
@@ -312,23 +315,23 @@ export default function Workstation() {
     } catch (e) {
       console.warn('Heartbeat update failed');
     }
-  };
+  }
 
-  const fetchStats = async () => {
+  async function fetchStats() {
     try {
       const res = await apiRequest('/api/session/stats');
       if (res.success) setStats(res.data);
     } catch (e) {}
-  };
+  }
 
-  const fetchAlerts = async () => {
+  async function fetchAlerts() {
     try {
       const res = await apiRequest('/api/manager/alerts');
       if (res.success) setAlerts(res.data);
     } catch (e) {}
-  };
+  }
 
-  const fetchWhatsAppTemplates = async () => {
+  async function fetchWhatsAppTemplates() {
     try {
       // Seeded fallback templates
       setWhatsAppTemplates([
@@ -336,18 +339,18 @@ export default function Workstation() {
         { _id: 'wa-tpl-followup', name: 'Call Follow-up & Booking Link', body: 'Hi {{first_name}}, tried giving you a quick call earlier. Whenever you have 5 minutes, feel free to pick a time that works best for you here: {{booking_link}}' }
       ]);
     } catch (e) {}
-  };
+  }
 
-  const fetchInboxes = async () => {
+  async function fetchInboxes() {
     try {
       const res = await apiRequest('/api/emails'); // Can fetch inboxes
       setInboxes([
         { _id: 'default', name: 'System Default SendGrid', fromEmail: 'outbound@8020dialer.com', fromName: '80/20 Outbound' }
       ]);
     } catch (e) {}
-  };
+  }
 
-  const fetchClosers = async () => {
+  async function fetchClosers() {
     try {
       const res = await apiRequest('/api/auth/register'); // Get user lists
       setClosersList([
@@ -355,9 +358,9 @@ export default function Workstation() {
         { _id: '2', name: 'Closer Alex' }
       ]);
     } catch (e) {}
-  };
+  }
 
-  const fetchQueue = async () => {
+  async function fetchQueue() {
     setLoading(true);
     try {
       const res = await apiRequest('/api/leads/queue');
@@ -371,15 +374,15 @@ export default function Workstation() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   // Lead selection & Lock acquisition
-  const handleSelectLead = async (lead) => {
+  async function handleSelectLead(lead) {
     if (stats.isOnBreak) {
       alert('Please end your break before contacting leads.');
       return;
     }
-    
+
     setFetchingLead(true);
     setOutcomeError('');
     setNotes('');
@@ -387,7 +390,7 @@ export default function Workstation() {
     setCallbackDate('');
     setMessageError('');
     setMessageSuccess('');
-    
+
     // Normalize and optimistically set selected lead
     const normalized = normalizeLead(lead);
     setSelectedLead(normalized);
@@ -408,7 +411,7 @@ export default function Workstation() {
       if (res.success && res.data) {
         const fullNormalized = normalizeLead(res.data);
         setSelectedLead(fullNormalized);
-        
+
         // Fetch timeline logs
         const historyRes = await apiRequest(`/api/manager/activity?limit=50`).catch(() => null);
         if (historyRes && historyRes.success) {
@@ -422,9 +425,9 @@ export default function Workstation() {
     } finally {
       setFetchingLead(false);
     }
-  };
+  }
 
-  const handleClaimLead = async () => {
+  async function handleClaimLead() {
     if (stats.isOnBreak) {
       alert('Please end your break before claiming leads.');
       return;
@@ -443,10 +446,10 @@ export default function Workstation() {
     } finally {
       setClaimingLead(false);
     }
-  };
+  }
 
   // Outbound Dialing
-  const startCall = async () => {
+  async function startCall() {
     const targetPhone = selectedLead?.phone || selectedLead?.contact?.phone;
     if (!selectedLead || !targetPhone) {
       alert('No phone number available for this contact.');
@@ -468,17 +471,18 @@ export default function Workstation() {
     try {
       if (deviceRef.current) {
         const targetLeadId = selectedLead._id || selectedLead.id;
-        const conn = await deviceRef.current.connect({ 
-          params: { 
-            To: targetPhone, 
-            leadId: targetLeadId 
-          }, 
-          To: targetPhone 
+        const conn = await deviceRef.current.connect({
+          params: {
+            To: targetPhone,
+            leadId: targetLeadId
+          },
+          To: targetPhone
         });
         setActiveConnection(conn);
         if (conn.on) {
           conn.on('accept', () => {
-            setCallStatus('active');
+            setCallDuration(0);
+          setCallStatus('active');
             const sid = conn?.parameters?.CallSid || conn?.customParameters?.get?.('CallSid') || '';
             setCallSid(sid);
           });
@@ -504,6 +508,7 @@ export default function Workstation() {
         });
         if (res.success && res.data) {
           setCallSid(res.data.callSid);
+          setCallDuration(0);
           setCallStatus('active');
         } else {
           throw new Error(res.message || 'Outbound call failed.');
@@ -513,9 +518,9 @@ export default function Workstation() {
       alert(e.message || 'Outbound call failed. Please verify Allowed Calling Hours in Admin Settings.');
       setCallStatus('ready');
     }
-  };
+  }
 
-  const endCall = () => {
+  function endCall() {
     if (deviceRef.current) {
       deviceRef.current.disconnectAll();
     } else {
@@ -525,9 +530,9 @@ export default function Workstation() {
       setCallStatus('ready');
       setIsMuted(false);
     }
-  };
+  }
 
-  const toggleMute = () => {
+  function toggleMute() {
     if (activeConnection) {
       const nextMute = !isMuted;
       activeConnection.mute(nextMute);
@@ -538,10 +543,10 @@ export default function Workstation() {
       setIsMuted(nextMute);
       setCallStatus(nextMute ? 'muted' : 'active');
     }
-  };
+  }
 
   // Outbound SMS
-  const sendSms = async (e) => {
+  async function sendSms(e) {
     e.preventDefault();
     const targetPhone = selectedLead?.phone || selectedLead?.contact?.phone;
     if (!selectedLead || !targetPhone) {
@@ -593,10 +598,10 @@ export default function Workstation() {
       setSendingMessage(false);
       setTimeout(() => setMessageSuccess(''), 4000);
     }
-  };
+  }
 
   // Outbound WhatsApp
-  const sendWhatsApp = async (e) => {
+  async function sendWhatsApp(e) {
     e.preventDefault();
     const targetPhone = selectedLead?.phone || selectedLead?.contact?.phone;
     if (!selectedLead || !targetPhone) {
@@ -655,13 +660,13 @@ export default function Workstation() {
       setSendingMessage(false);
       setTimeout(() => setMessageSuccess(''), 4000);
     }
-  };
+  }
 
   // Check if lead has email opt-out suppression
   const hasEmailSuppression = (lead) => lead && (lead.suppression?.email || lead.coldOutreachStopped);
 
   // Outbound Email (Individual Claude Personalization)
-  const handleGenerateAiDraft = async (targetLead = null, overrideGoal = null, overrideTone = null, overrideLength = null, overrideInstruction = null) => {
+  async function handleGenerateAiDraft(targetLead = null, overrideGoal = null, overrideTone = null, overrideLength = null, overrideInstruction = null) {
     const activeLead = targetLead || selectedLead;
     const leadId = activeLead?._id || activeLead?.id;
     if (!leadId) return;
@@ -699,18 +704,18 @@ export default function Workstation() {
       setIsGeneratingAi(false);
       setTimeout(() => setMessageSuccess(''), 4000);
     }
-  };
+  }
 
-  const handleToggleClaudeMode = (mode) => {
+  function handleToggleClaudeMode(mode) {
     setSingleEmailMode(mode);
     if (mode === 'claude_ai') {
       handleGenerateAiDraft(selectedLead);
     } else {
       setClaudeGeneratedDraft(false);
     }
-  };
+  }
 
-  const sendOutboundEmail = async (e) => {
+  async function sendOutboundEmail(e) {
     e.preventDefault();
     const targetEmail = selectedLead?.email || selectedLead?.contact?.email;
     if (!selectedLead || !targetEmail) {
@@ -768,10 +773,10 @@ export default function Workstation() {
       setSendingMessage(false);
       setTimeout(() => setMessageSuccess(''), 4000);
     }
-  };
+  }
 
   // Self-service Password Update
-  const handleUpdatePassword = async (e) => {
+  async function handleUpdatePassword(e) {
     e.preventDefault();
     setPwError('');
     setPwSuccess('');
@@ -806,13 +811,13 @@ export default function Workstation() {
     } finally {
       setPwSaving(false);
     }
-  };
+  }
 
   // Submit Call Outcome & release lock
-  const handleSubmitOutcome = async (e) => {
+  async function handleSubmitOutcome(e) {
     e.preventDefault();
     if (!selectedLead) return;
-    
+
     setSubmittingOutcome(true);
     setOutcomeError('');
 
@@ -852,17 +857,17 @@ export default function Workstation() {
     } finally {
       setSubmittingOutcome(false);
     }
-  };
+  }
 
   // 💾 Save Pipeline Stage (Fast 0ms Sync to Manager Console)
-  const handleSavePipelineStage = async (newStage, note) => {
+  async function handleSavePipelineStage(newStage, note) {
     if (!selectedLead) return;
     const leadId = selectedLead._id || selectedLead.id;
     const targetStage = newStage || selectedLead.stage || 'new_lead';
-    
+
     setSavingStage(true);
     setStageSaveSuccess('');
-    
+
     // Optimistically update selectedLead and leads list
     setSelectedLead(prev => ({
       ...prev,
@@ -888,10 +893,10 @@ export default function Workstation() {
     } finally {
       setSavingStage(false);
     }
-  };
+  }
 
   // Break toggler
-  const handleToggleBreak = async () => {
+  async function handleToggleBreak() {
     if (selectedLead) {
       alert('Please submit call outcome and release lead lock before going on break.');
       return;
@@ -906,21 +911,23 @@ export default function Workstation() {
         }));
       }
     } catch (e) {}
-  };
+  }
 
   // Format seconds -> HH:MM:SS
-  const formatTime = (totalSecs) => {
+  function formatTime(totalSecs) {
     const hrs = Math.floor(totalSecs / 3600).toString().padStart(2, '0');
     const mins = Math.floor((totalSecs % 3600) / 60).toString().padStart(2, '0');
     const secs = (totalSecs % 60).toString().padStart(2, '0');
     return `${hrs}:${mins}:${secs}`;
-  };
+  }
 
-  const handleLogout = () => {
+  async function handleLogout() {
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    if (!response.ok) { alert("Logout unavailable. Please try again."); return; }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     router.push('/login');
-  };
+  }
 
   if (!isMounted || !user) {
     return (
@@ -935,7 +942,7 @@ export default function Workstation() {
 
   return (
     <div className="flex flex-col bg-[#07090e] font-sans min-h-screen text-slate-100" style={{fontFamily:"'Inter',system-ui,sans-serif"}}>
-      
+
       {/* Top Navbar */}
       <header className="bg-[#0d0f18]/95 backdrop-blur-xl border-b border-white/6 px-6 h-14 flex items-center justify-between z-20 shrink-0 shadow-lg shadow-black/40">
         <div className="flex items-center gap-3">
@@ -1058,7 +1065,7 @@ export default function Workstation() {
 
           {/* Stats */}
           <div className="bg-[#121624] border border-white/6 rounded-2xl p-4 shadow-lg shadow-black/20">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Today's Stats</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Today&apos;s Stats</p>
             <div className="grid grid-cols-3 gap-2">
               <div className="flex flex-col gap-0.5 bg-[#07090e] p-2 rounded-xl border border-white/5">
                 <span className="text-[10px] text-slate-400 font-medium">Active</span>
@@ -1873,7 +1880,7 @@ export default function Workstation() {
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
-            
+
             <form onSubmit={async (e) => {
               await sendOutboundEmail(e);
               setShowEmailComposeModal(false);

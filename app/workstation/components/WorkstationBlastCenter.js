@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { apiRequest } from '@/lib/apiClient';
 
 export default function WorkstationBlastCenter({ user }) {
@@ -54,7 +54,7 @@ export default function WorkstationBlastCenter({ user }) {
   const [leadSelectionMap, setLeadSelectionMap] = useState({});
 
   // Test Email state
-  const [testEmail, setTestEmail] = useState('');
+  const [testEmail, setTestEmail] = useState(user?.email || '');
   const [sendingTest, setSendingTest] = useState(false);
   const [testResult, setTestResult] = useState({ success: null, message: '' });
 
@@ -68,38 +68,9 @@ export default function WorkstationBlastCenter({ user }) {
   const [telemetry, setTelemetry] = useState(null);
   const [aiUsageStats, setAiUsageStats] = useState(null);
 
-  useEffect(() => {
-    if (user?.email) {
-      setTestEmail(user.email);
-    }
-    fetchData();
-  }, [user]);
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const leadRes = await apiRequest('/api/leads', 'GET');
-      if (leadRes.success && leadRes.data) {
-        setLeads(leadRes.data);
-        const map = {};
-        leadRes.data.forEach(l => { map[l._id || l.id] = true; });
-        setLeadSelectionMap(map);
-      }
 
-      setInboxes([
-        { _id: 'default', name: 'Default Outbound Identity', fromEmail: 'outreach@8020acquisition.com', fromName: '80/20 Acquisition', dailyLimit: 500, sentToday: 12 }
-      ]);
-
-      fetchCampaigns();
-      fetchAiUsage();
-    } catch (err) {
-      console.error('Failed to load workstation blast data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchCampaigns = async () => {
+  const fetchCampaigns = useCallback(async () => {
     try {
       const res = await apiRequest('/api/workstation/blasts', 'GET');
       if (res.success && res.data) {
@@ -108,9 +79,9 @@ export default function WorkstationBlastCenter({ user }) {
     } catch (e) {
       console.error('Error loading campaigns:', e);
     }
-  };
+  }, []);
 
-  const fetchAiUsage = async () => {
+  const fetchAiUsage = useCallback(async () => {
     try {
       const res = await apiRequest('/api/ai/personalize/usage', 'GET');
       if (res.success && res.data) {
@@ -119,7 +90,23 @@ export default function WorkstationBlastCenter({ user }) {
     } catch (e) {
       console.error('Error loading AI usage:', e);
     }
-  };
+  }, []);
+
+  const fetchData = useCallback(() => {
+    return apiRequest('/api/leads', 'GET').then(leadRes => {
+      if (leadRes.success && leadRes.data) {
+        setLeads(leadRes.data);
+        const map = {};
+        leadRes.data.forEach(lead => { map[lead._id || lead.id] = true; });
+        setLeadSelectionMap(map);
+      }
+      setInboxes([{ _id: 'default', name: 'Default Outbound Identity', fromEmail: 'outreach@8020acquisition.com', fromName: '80/20 Acquisition', dailyLimit: 500, sentToday: 0 }]);
+      return Promise.all([fetchCampaigns(), fetchAiUsage()]);
+    }).catch(error => console.error('Failed to load workstation blast data:', error))
+      .finally(() => setLoading(false));
+  }, [fetchCampaigns, fetchAiUsage]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const filteredLeads = useMemo(() => {
     return leads.filter(lead => {
@@ -163,14 +150,14 @@ export default function WorkstationBlastCenter({ user }) {
     };
   }, [filteredLeads, leadSelectionMap, leads.length]);
 
-  const handleSelectAll = (checked) => {
+  function handleSelectAll(checked) {
     const newMap = { ...leadSelectionMap };
     filteredLeads.forEach(l => { newMap[l._id || l.id] = checked; });
     setLeadSelectionMap(newMap);
-  };
+  }
 
   // --- AI Batch Personalization Handler ---
-  const handleStartAiGeneration = async () => {
+  async function handleStartAiGeneration() {
     const selectedLeadIds = filteredLeads
       .filter(l => leadSelectionMap[l._id || l.id] && !l.suppression?.email && (l.email || l.contact?.email))
       .map(l => l._id || l.id);
@@ -215,10 +202,10 @@ export default function WorkstationBlastCenter({ user }) {
     } finally {
       setGeneratingAi(false);
     }
-  };
+  }
 
   // --- Per-Lead Regeneration Handler ---
-  const handleRegenerateSingle = async () => {
+  async function handleRegenerateSingle() {
     if (!activeRegenLead) return;
     setIsRegeneratingSingle(true);
     try {
@@ -246,10 +233,10 @@ export default function WorkstationBlastCenter({ user }) {
     } finally {
       setIsRegeneratingSingle(false);
     }
-  };
+  }
 
   // --- Approve / Skip Individual Drafts ---
-  const handleToggleApproveDraft = (draftId) => {
+  function handleToggleApproveDraft(draftId) {
     setAiDrafts(prev => prev.map(d => {
       if (d._id === draftId || d.id === draftId) {
         const nextStatus = d.status === 'approved' ? 'generated' : 'approved';
@@ -257,29 +244,29 @@ export default function WorkstationBlastCenter({ user }) {
       }
       return d;
     }));
-  };
+  }
 
-  const handleSkipDraft = (draftId) => {
+  function handleSkipDraft(draftId) {
     setAiDrafts(prev => prev.map(d => {
       if (d._id === draftId || d.id === draftId) {
         return { ...d, status: 'skipped' };
       }
       return d;
     }));
-  };
+  }
 
-  const handleApproveAllDrafts = () => {
+  function handleApproveAllDrafts() {
     setAiDrafts(prev => prev.map(d => d.status !== 'skipped' && d.status !== 'generation_failed' ? { ...d, status: 'approved' } : d));
-  };
+  }
 
   // --- Inline Editing of Drafts ---
-  const startEditingDraft = (draft) => {
+  function startEditingDraft(draft) {
     setEditingDraftId(draft._id || draft.id);
     setEditSubject(draft.subject || '');
     setEditBody(draft.body || '');
-  };
+  }
 
-  const saveEditingDraft = () => {
+  function saveEditingDraft() {
     if (!editingDraftId) return;
     setAiDrafts(prev => prev.map(d => {
       if (d._id === editingDraftId || d.id === editingDraftId) {
@@ -288,10 +275,10 @@ export default function WorkstationBlastCenter({ user }) {
       return d;
     }));
     setEditingDraftId(null);
-  };
+  }
 
   // --- Launch & Dispatch Final Emails ---
-  const handleLaunchCampaign = async () => {
+  async function handleLaunchCampaign() {
     setSubmitting(true);
     setSubmitError('');
 
@@ -340,7 +327,7 @@ export default function WorkstationBlastCenter({ user }) {
         });
 
         if (res.success) {
-          setDispatchProgress({ sent: selectedLeadIds.length, total: selectedLeadIds.length, completed: true });
+          setDispatchProgress({ sent: res.data?.stats?.sent || 0, total: res.data?.stats?.total || selectedLeadIds.length, completed: true });
           setStep(4);
           fetchCampaigns();
         } else {
@@ -352,9 +339,9 @@ export default function WorkstationBlastCenter({ user }) {
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
-  const handleSendTestEmail = async () => {
+  async function handleSendTestEmail() {
     if (!testEmail) return;
     setSendingTest(true);
     setTestResult({ success: null, message: '' });
@@ -376,7 +363,7 @@ export default function WorkstationBlastCenter({ user }) {
     } finally {
       setSendingTest(false);
     }
-  };
+  }
 
   return (
     <div className="space-y-6">
@@ -500,7 +487,7 @@ export default function WorkstationBlastCenter({ user }) {
                           <span className="bg-purple-500/20 text-purple-300 text-[10px] px-2 py-0.5 rounded-full border border-purple-500/30">Claude 3.5</span>
                         </div>
                         <div className="text-xs text-slate-400 mt-0.5">
-                          Generates individualized, high-converting cold outreach tailored to each prospect's company and role with mandatory review before sending.
+                          Generates individualized, high-converting cold outreach tailored to each prospect&apos;s company and role with mandatory review before sending.
                         </div>
                       </div>
                     </div>

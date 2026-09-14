@@ -1,5 +1,9 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
+import { authenticatedFetch } from "@/lib/apiClient";
+
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import CollapsibleSidebar from '../components/CollapsibleSidebar';
@@ -31,7 +35,7 @@ export default function PipelineStatisticsPage() {
   const [salesReps, setSalesReps] = useState([]);
   const [selectedRep, setSelectedRep] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Lead Detail Drawer State
   const [selectedLeadDrawer, setSelectedLeadDrawer] = useState(null);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -52,7 +56,7 @@ export default function PipelineStatisticsPage() {
   const [drawerActionLoading, setDrawerActionLoading] = useState(false);
 
   // Authenticate user with 3-Role Support
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     setIsMounted(true);
     const storedUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
@@ -61,7 +65,7 @@ export default function PipelineStatisticsPage() {
       return;
     }
     try {
-      const parsed = JSON.parse(storedUser);
+      const parsed = sessionUser;
       const roleStr = String(parsed.role || 'user').toLowerCase();
       let normalized = 'user';
       if (['owner', 'manager', 'admin'].includes(roleStr)) normalized = 'admin';
@@ -76,47 +80,26 @@ export default function PipelineStatisticsPage() {
   }, [router]);
 
   // Fetch Pipeline Data from API with resilient offline & background heartbeat handling
-  const fetchPipeline = useCallback(async (isSilent = false) => {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    if (!isSilent) setRefreshing(true);
+  const fetchPipeline = useCallback((isSilent = false) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return Promise.resolve();
     const token = localStorage.getItem('token');
-    if (!token) return;
-
-    try {
-      let url = `/api/leads/pipeline?`;
-      if (selectedRep && selectedRep !== 'all') url += `repId=${encodeURIComponent(selectedRep)}&`;
-      if (searchQuery) url += `search=${encodeURIComponent(searchQuery)}&`;
-
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!res.ok) {
-        if (!isSilent) console.warn('Pipeline fetch status:', res.status);
-        return;
+    if (!token) return Promise.resolve();
+    let url = '/api/leads/pipeline?';
+    if (selectedRep && selectedRep !== 'all') url += 'repId=' + encodeURIComponent(selectedRep) + '&';
+    if (searchQuery) url += 'search=' + encodeURIComponent(searchQuery) + '&';
+    return authenticatedFetch(url, { headers: { Authorization: 'Bearer ' + token } }).then(async res => {
+      if (!res.ok) { if (!isSilent) console.warn('Pipeline fetch status:', res.status); return; }
+      const result = await res.json();
+      const data = result.data;
+      if (result.success && data) {
+        setColumns(data.columns || {}); setStageCounts(data.stageCounts || {}); setTotalLeads(data.totalLeads || 0);
+        if (data.outcomeClassification) setOutcomeClassification(data.outcomeClassification);
+        if (data.conversionFunnel) setConversionFunnel(data.conversionFunnel);
+        if (data.salesReps) setSalesReps(data.salesReps);
+        if (data.userRole) setUserRole(data.userRole);
       }
-      const data = await res.json();
-
-      if (data.success && data.data) {
-        setColumns(data.data.columns || {});
-        setStageCounts(data.data.stageCounts || {});
-        setTotalLeads(data.data.totalLeads || 0);
-        if (data.data.outcomeClassification) {
-          setOutcomeClassification(data.data.outcomeClassification);
-        }
-        if (data.data.conversionFunnel) {
-          setConversionFunnel(data.data.conversionFunnel);
-        }
-        if (data.data.salesReps) setSalesReps(data.data.salesReps);
-        if (data.data.userRole) setUserRole(data.data.userRole);
-      }
-    } catch (err) {
-      if (!isSilent) {
-        console.warn('Pipeline fetch notice:', err.message);
-      }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+    }).catch(error => { if (!isSilent) console.warn('Pipeline fetch notice:', error.message); })
+      .finally(() => { setLoading(false); setRefreshing(false); });
   }, [selectedRep, searchQuery]);
 
   // Real-time Live Multi-channel Subscription (0ms instant sync)
@@ -126,7 +109,7 @@ export default function PipelineStatisticsPage() {
       const leadId = updatedLead._id || updatedLead.id;
       const rawStage = updatedLead.stage || updatedLead.pipelineStage || updatedLead.status;
       const newStage = normalizePipelineStage(rawStage);
-      
+
       if (newStage) {
         setColumns(prev => {
           const next = { ...prev };
@@ -134,12 +117,12 @@ export default function PipelineStatisticsPage() {
           Object.keys(next).forEach(stg => {
             next[stg] = (next[stg] || []).filter(l => {
               if (l._id === leadId || l.id === leadId) {
-                movedLead = { 
-                  ...l, 
-                  ...updatedLead, 
-                  stage: newStage, 
+                movedLead = {
+                  ...l,
+                  ...updatedLead,
+                  stage: newStage,
                   status: newStage,
-                  stage_updated_at: new Date().toISOString() 
+                  stage_updated_at: new Date().toISOString()
                 };
                 return false;
               }
@@ -166,11 +149,11 @@ export default function PipelineStatisticsPage() {
       fetchPipeline(true);
     }, 4000);
 
-    const handleVisibilityOrOnline = () => {
+    function handleVisibilityOrOnline() {
       if (typeof document !== 'undefined' && !document.hidden) {
         fetchPipeline(true);
       }
-    };
+    }
 
     window.addEventListener('online', handleVisibilityOrOnline);
     document.addEventListener('visibilitychange', handleVisibilityOrOnline);
@@ -183,7 +166,7 @@ export default function PipelineStatisticsPage() {
   }, [user, fetchPipeline]);
 
   // Handle Quick Stage Transition (Available to all 3 roles: admin, user, updater_only)
-  const handleStageChange = async (leadId, targetStage, e) => {
+  async function handleStageChange(leadId, targetStage, e) {
     if (e) e.stopPropagation();
     const normalizedTarget = normalizePipelineStage(targetStage);
     setTransitioningStageId(leadId);
@@ -227,7 +210,7 @@ export default function PipelineStatisticsPage() {
 
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('/api/leads/stage', {
+      const res = await authenticatedFetch('/api/leads/stage', {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -248,10 +231,10 @@ export default function PipelineStatisticsPage() {
       setTransitioningStageId(null);
       fetchPipeline(true);
     }
-  };
+  }
 
   // Open Lead Detail Drawer (Admin & Standard User only; Disabled for updater_only)
-  const handleOpenLeadDrawer = async (lead) => {
+  async function handleOpenLeadDrawer(lead) {
     if (userRole === 'updater_only') {
       return; // updater_only has restricted view
     }
@@ -266,7 +249,7 @@ export default function PipelineStatisticsPage() {
     try {
       const token = localStorage.getItem('token');
       const leadId = lead._id || lead.id;
-      const res = await fetch(`/api/leads/${leadId}/timeline`, {
+      const res = await authenticatedFetch(`/api/leads/${leadId}/timeline`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -278,17 +261,17 @@ export default function PipelineStatisticsPage() {
     } finally {
       setTimelineLoading(false);
     }
-  };
+  }
 
   // Drawer Action: Send Email
-  const handleDrawerSendEmail = async (e) => {
+  async function handleDrawerSendEmail(e) {
     e.preventDefault();
     if (!drawerEmailSubject.trim() || !drawerEmailBody.trim() || !selectedLeadDrawer) return;
     setDrawerActionLoading(true);
     try {
       const token = localStorage.getItem('token');
       const targetId = selectedLeadDrawer._id || selectedLeadDrawer.id;
-      const res = await fetch('/api/emails', {
+      const res = await authenticatedFetch('/api/emails', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -317,17 +300,17 @@ export default function PipelineStatisticsPage() {
       setDrawerActionLoading(false);
       setTimeout(() => setDrawerActionSuccess(''), 4000);
     }
-  };
+  }
 
   // Drawer Action: Generate Claude Personalized Email
-  const handleDrawerGenerateClaudeEmail = async (overrideGoal = null, overrideTone = null, overrideLength = null, overrideInstruction = null) => {
+  async function handleDrawerGenerateClaudeEmail(overrideGoal = null, overrideTone = null, overrideLength = null, overrideInstruction = null) {
     if (!selectedLeadDrawer) return;
     setDrawerGeneratingClaude(true);
     setDrawerActionSuccess('');
     try {
       const token = localStorage.getItem('token');
       const targetId = selectedLeadDrawer._id || selectedLeadDrawer.id;
-      const res = await fetch('/api/ai/personalize/batch', {
+      const res = await authenticatedFetch('/api/ai/personalize/batch', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -362,17 +345,17 @@ export default function PipelineStatisticsPage() {
       setDrawerGeneratingClaude(false);
       setTimeout(() => setDrawerActionSuccess(''), 4000);
     }
-  };
+  }
 
-  const handleToggleDrawerClaudeMode = (mode) => {
+  function handleToggleDrawerClaudeMode(mode) {
     setDrawerEmailMode(mode);
     if (mode === 'claude_ai') {
       handleDrawerGenerateClaudeEmail();
     }
-  };
+  }
 
   // Helper: Format outcome badge for lead card
-  const getLeadOutcomeBadge = (lead) => {
+  function getLeadOutcomeBadge(lead) {
     const outcome = String(lead.outcome || lead.last_outcome || lead.status || '').toLowerCase();
     const stage = String(lead.stage || '').toLowerCase();
     const note = String(lead.last_activity_note || lead.notes || '').toLowerCase();
@@ -399,18 +382,24 @@ export default function PipelineStatisticsPage() {
       return { label: 'Disqualified', icon: '🔴', color: 'bg-rose-500/15 text-rose-300 border-rose-500/30' };
     }
     return null;
-  };
+  }
 
   // Format time elapsed
-  const formatTimeElapsed = (timestamp) => {
-    if (!timestamp) return 'Just now';
+  const [renderTime, setRenderTime] = useState(0);
+  useEffect(() => {
+    const update = () => setRenderTime(Date.now());
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, []);
+  function formatTimeElapsed(timestamp) {
+    if (!timestamp || !renderTime) return 'Just now';
     const date = new Date(timestamp);
-    const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+    const diff = Math.floor((renderTime - date.getTime()) / 1000);
     if (diff < 60) return `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return `${Math.floor(diff / 86400)}d ago`;
-  };
+  }
 
   if (!isMounted || loading || !user) {
     return (
@@ -426,10 +415,10 @@ export default function PipelineStatisticsPage() {
   return (
     <div className="flex h-screen bg-[#07090e] text-slate-200 overflow-hidden select-none font-sans">
       {/* 1. Navigation Sidebar */}
-      <CollapsibleSidebar 
-        activeTab="pipeline" 
-        user={user} 
-        setActiveTab={(tab) => router.push(`/dashboard?tab=${tab}`)} 
+      <CollapsibleSidebar
+        activeTab="pipeline"
+        user={user}
+        setActiveTab={(tab) => router.push(`/dashboard?tab=${tab}`)}
       />
 
       {/* 2. Main Visual Pipeline Container */}
@@ -449,11 +438,11 @@ export default function PipelineStatisticsPage() {
                   <span className="bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-[10px] font-bold px-2 py-0.5 rounded-full">
                     {totalLeads} Total Prospects
                   </span>
-                  
+
                   {/* Role Badge */}
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
-                    userRole === 'admin' 
-                      ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' 
+                    userRole === 'admin'
+                      ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
                       : userRole === 'updater_only'
                       ? 'bg-purple-500/10 text-purple-300 border-purple-500/30'
                       : 'bg-blue-500/10 text-blue-300 border-blue-500/30'

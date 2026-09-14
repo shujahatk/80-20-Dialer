@@ -1,3 +1,9 @@
+
+if (process.env.ALLOW_LEGACY_INTEGRATION_TESTS !== '1' || !process.env.TEST_SUPABASE_URL || !process.env.TEST_SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('Legacy integration scripts mutate records and may send messages. Use an isolated test Supabase project with TEST_SUPABASE_URL, TEST_SUPABASE_SERVICE_ROLE_KEY, and ALLOW_LEGACY_INTEGRATION_TESTS=1. npm test runs isolated regression tests.');
+}
+process.env.SUPABASE_URL = process.env.TEST_SUPABASE_URL;
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.TEST_SUPABASE_SERVICE_ROLE_KEY;
 import { generateAccessToken } from '../lib/auth.js';
 import { UserStore, LeadStore, BlastCampaignStore, AiUsageStore } from '../lib/store.js';
 import { SuppressionStore } from '../lib/suppression/suppressionStore.js';
@@ -125,7 +131,7 @@ async function runComprehensiveHardeningSuite() {
 DNC Target Returned,permanent-optout@client.com,+15559876543,Return Corp`;
   const reImportRes = await processCsvUpload({ csvBufferOrString: reImportCsv, assignToUserId: 'pool' });
   assert(reImportRes.success === true && reImportRes.summary.imported === 1, 'Re-imported CSV lead processed');
-  
+
   const reImportedLeads = await LeadStore.findPendingByEmail('permanent-optout@client.com');
   const dncReImported = reImportedLeads[0];
   assert(
@@ -362,4 +368,3 @@ runComprehensiveHardeningSuite().catch(err => {
   console.error('Fatal hardening test error:', err);
   process.exit(1);
 });
-

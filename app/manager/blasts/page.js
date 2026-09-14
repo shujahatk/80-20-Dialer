@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiRequest } from '@/lib/apiClient';
@@ -79,31 +81,9 @@ export default function ManagerBlastsPage() {
   // Active Telemetry Campaign Modal
   const [selectedCampaign, setSelectedCampaign] = useState(null);
 
-  useEffect(() => {
-    const localUser = localStorage.getItem('user');
-    const token = localStorage.getItem('token');
-    if (!localUser || !token) {
-      router.push('/login');
-      return;
-    }
 
-    try {
-      const parsed = JSON.parse(localUser);
-      if (parsed.role === 'salesperson') {
-        router.push('/workstation');
-        return;
-      }
-      setUser(parsed);
-      setTestEmail(parsed.email || '');
-    } catch {
-      router.push('/login');
-      return;
-    }
 
-    fetchData();
-  }, [router]);
-
-  const fetchData = async () => {
+  async function fetchData() {
     setLoading(true);
     try {
       const [leadsRes, campRes, usersRes, aiRes] = await Promise.all([
@@ -149,9 +129,33 @@ export default function ManagerBlastsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const fetchCampaigns = async () => {
+  useAuthenticatedEffect((sessionUser) => {
+    const localUser = localStorage.getItem('user');
+    const token = localStorage.getItem('token');
+    if (!localUser || !token) {
+      router.push('/login');
+      return;
+    }
+
+    try {
+      const parsed = sessionUser;
+      if (parsed.role === 'salesperson') {
+        router.push('/workstation');
+        return;
+      }
+      setUser(parsed);
+      setTestEmail(parsed.email || '');
+    } catch {
+      router.push('/login');
+      return;
+    }
+
+    fetchData();
+  }, [router]);
+
+  async function fetchCampaigns() {
     try {
       const res = await apiRequest('/api/manager/blasts', 'GET');
       if (res.success && Array.isArray(res.data)) {
@@ -160,9 +164,9 @@ export default function ManagerBlastsPage() {
     } catch (e) {
       console.warn('Error fetching campaigns:', e);
     }
-  };
+  }
 
-  const fetchAiUsage = async () => {
+  async function fetchAiUsage() {
     try {
       const res = await apiRequest('/api/ai/personalize/usage', 'GET');
       if (res.success && res.data) {
@@ -171,7 +175,7 @@ export default function ManagerBlastsPage() {
     } catch (e) {
       console.warn('Error fetching AI usage:', e);
     }
-  };
+  }
 
   // Filtered Leads
   const filteredLeads = useMemo(() => {
@@ -233,23 +237,23 @@ export default function ManagerBlastsPage() {
     };
   }, [filteredLeads, leadSelectionMap, leads.length]);
 
-  const handleSelectAll = (checked) => {
+  function handleSelectAll(checked) {
     const newMap = { ...leadSelectionMap };
     filteredLeads.forEach(l => {
       newMap[l._id || l.id] = checked;
     });
     setLeadSelectionMap(newMap);
-  };
+  }
 
-  const handleToggleLead = (id) => {
+  function handleToggleLead(id) {
     setLeadSelectionMap(prev => ({
       ...prev,
       [id]: !prev[id]
     }));
-  };
+  }
 
   // --- Claude AI Batch Personalization Handler ---
-  const handleStartAiGeneration = async () => {
+  async function handleStartAiGeneration() {
     const selectedLeadIds = filteredLeads
       .filter(l => leadSelectionMap[l._id || l.id] && !l.suppression?.email && (l.email || l.contact?.email))
       .map(l => l._id || l.id);
@@ -293,10 +297,10 @@ export default function ManagerBlastsPage() {
     } finally {
       setGeneratingAi(false);
     }
-  };
+  }
 
   // --- Per-Lead Single Regeneration Handler ---
-  const handleRegenerateSingle = async () => {
+  async function handleRegenerateSingle() {
     if (!activeRegenLead) return;
     setIsRegeneratingSingle(true);
     try {
@@ -328,10 +332,10 @@ export default function ManagerBlastsPage() {
     } finally {
       setIsRegeneratingSingle(false);
     }
-  };
+  }
 
   // Approve / Skip Drafts
-  const handleToggleApproveDraft = (draftId) => {
+  function handleToggleApproveDraft(draftId) {
     setAiDrafts(prev =>
       prev.map(d => {
         if (d._id === draftId || d.id === draftId) {
@@ -341,9 +345,9 @@ export default function ManagerBlastsPage() {
         return d;
       })
     );
-  };
+  }
 
-  const handleSkipDraft = (draftId) => {
+  function handleSkipDraft(draftId) {
     setAiDrafts(prev =>
       prev.map(d => {
         if (d._id === draftId || d.id === draftId) {
@@ -352,24 +356,24 @@ export default function ManagerBlastsPage() {
         return d;
       })
     );
-  };
+  }
 
-  const handleApproveAllDrafts = () => {
+  function handleApproveAllDrafts() {
     setAiDrafts(prev =>
       prev.map(d =>
         d.status !== 'skipped' && d.status !== 'generation_failed' ? { ...d, status: 'approved' } : d
       )
     );
-  };
+  }
 
   // Inline Draft Editing
-  const startEditingDraft = (draft) => {
+  function startEditingDraft(draft) {
     setEditingDraftId(draft._id || draft.id);
     setEditSubject(draft.subject || '');
     setEditBody(draft.body || '');
-  };
+  }
 
-  const saveEditingDraft = () => {
+  function saveEditingDraft() {
     if (!editingDraftId) return;
     setAiDrafts(prev =>
       prev.map(d => {
@@ -380,10 +384,10 @@ export default function ManagerBlastsPage() {
       })
     );
     setEditingDraftId(null);
-  };
+  }
 
   // --- Campaign Launch & Dispatch Handler ---
-  const handleLaunchCampaign = async () => {
+  async function handleLaunchCampaign() {
     setSubmitting(true);
     setSubmitError('');
 
@@ -439,8 +443,8 @@ export default function ManagerBlastsPage() {
 
         if (res.success) {
           setDispatchProgress({
-            sent: selectedLeadIds.length,
-            total: selectedLeadIds.length,
+            sent: res.data.stats?.sent || 0,
+            total: res.data.stats?.total || selectedLeadIds.length,
             completed: true
           });
           setStep(4);
@@ -454,10 +458,10 @@ export default function ManagerBlastsPage() {
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
   // --- Test Email Send ---
-  const handleSendTestEmail = async () => {
+  async function handleSendTestEmail() {
     if (!testEmail || !testEmail.includes('@')) {
       setTestResult({ success: false, message: 'Please provide a valid test email address.' });
       return;
@@ -491,7 +495,7 @@ export default function ManagerBlastsPage() {
     } finally {
       setSendingTest(false);
     }
-  };
+  }
 
   // Live Sample Preview for Standard Mode
   const samplePreview = useMemo(() => {
@@ -1211,7 +1215,7 @@ export default function ManagerBlastsPage() {
                                   {draft.leadName || draft.leadEmail}
                                 </span>
                                 {draft.company && (
-                                  <span className="text-[11px] text-slate-400">• {draft.company}</span>
+                                  <span className="text-[11px] text-slate-400">• {typeof draft.company === 'string' ? draft.company : (draft.company?.name || '')}</span>
                                 )}
                                 <span
                                   className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
@@ -1395,7 +1399,7 @@ export default function ManagerBlastsPage() {
                 <div className="space-y-2">
                   <h3 className="text-xl font-black text-white">Campaign Dispatched Successfully!</h3>
                   <p className="text-xs text-slate-400">
-                    Your campaign has been queued and dispatched through the 80/20 Outbound delivery relay.
+                    Your campaign has been queued. Open campaign progress to monitor delivery.
                   </p>
                 </div>
 
@@ -1490,7 +1494,7 @@ export default function ManagerBlastsPage() {
                           Subject: {camp.templateSubject || camp.subject || 'Personalized AI Subject'}
                         </p>
                         <div className="text-[10px] text-slate-500">
-                          Dispatched: {new Date(camp.createdAt || Date.now()).toLocaleString()}
+                          Dispatched: {camp.createdAt ? new Date(camp.createdAt).toLocaleString() : '—'}
                         </div>
                       </div>
 
@@ -1605,7 +1609,7 @@ export default function ManagerBlastsPage() {
             <div className="text-xs text-slate-400">
               Custom instructions for{' '}
               <strong className="text-slate-200">{activeRegenLead.leadName || activeRegenLead.leadEmail}</strong>
-              {activeRegenLead.company ? ` (${activeRegenLead.company})` : ''}:
+              {activeRegenLead.company ? ` (${typeof activeRegenLead.company === 'string' ? activeRegenLead.company : (activeRegenLead.company?.name || '')})` : ''}:
             </div>
 
             <textarea

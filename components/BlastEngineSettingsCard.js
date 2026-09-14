@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { authenticatedFetch } from "@/lib/apiClient";
+
+import { useState, useEffect, useCallback } from 'react';
 
 export default function BlastEngineSettingsCard() {
   const [loading, setLoading] = useState(true);
@@ -8,28 +10,20 @@ export default function BlastEngineSettingsCard() {
   const [blastStatus, setBlastStatus] = useState(null);
   const [feedback, setFeedback] = useState(null);
 
-  const fetchStatus = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/settings/blast');
-      const data = await res.json();
-      setBlastStatus(data);
-    } catch (err) {
-      setBlastStatus({ connected: false, error: err.message });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchStatus = useCallback(() => {
+    return authenticatedFetch('/api/settings/blast').then(res => res.json()).then(data => setBlastStatus(data))
+      .catch(err => setBlastStatus({ connected: false, error: err.message })).finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     fetchStatus();
-  }, []);
+  }, [fetchStatus]);
 
   const handleTestAndSync = async () => {
     try {
       setSyncing(true);
       setFeedback(null);
-      const res = await fetch('/api/settings/blast/sync', {
+      const res = await authenticatedFetch('/api/settings/blast/sync', {
         method: 'POST',
       });
       const data = await res.json();

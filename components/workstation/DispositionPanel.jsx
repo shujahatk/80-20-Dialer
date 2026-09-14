@@ -1,5 +1,7 @@
 "use client";
 
+import { authenticatedFetch } from "@/lib/apiClient";
+
 import { useState } from 'react';
 import { broadcastPipelineUpdate } from '@/hooks/useRealtimePipeline';
 
@@ -10,6 +12,7 @@ export default function DispositionPanel({ activeLead, onDispositionComplete }) 
   const [disqualificationReason, setDisqualificationReason] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successBadge, setSuccessBadge] = useState('');
+  const [showLossModal, setShowLossModal] = useState(false);
 
   if (!activeLead) {
     return (
@@ -22,8 +25,6 @@ export default function DispositionPanel({ activeLead, onDispositionComplete }) 
       </div>
     );
   }
-
-  const [showLossModal, setShowLossModal] = useState(false);
 
   const handleQuickDisposition = async (outcome) => {
     if (outcome === 'not_interested' && !disqualificationReason) {
@@ -40,7 +41,7 @@ export default function DispositionPanel({ activeLead, onDispositionComplete }) 
     const leadId = activeLead._id || activeLead.id;
 
     try {
-      const res = await fetch('/api/workstation/disposition', {
+      const res = await authenticatedFetch('/api/workstation/disposition', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

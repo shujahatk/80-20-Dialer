@@ -1,3 +1,9 @@
+
+if (process.env.ALLOW_LEGACY_INTEGRATION_TESTS !== '1' || !process.env.TEST_SUPABASE_URL || !process.env.TEST_SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('Legacy integration scripts mutate records and may send messages. Use an isolated test Supabase project with TEST_SUPABASE_URL, TEST_SUPABASE_SERVICE_ROLE_KEY, and ALLOW_LEGACY_INTEGRATION_TESTS=1. npm test runs isolated regression tests.');
+}
+process.env.SUPABASE_URL = process.env.TEST_SUPABASE_URL;
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.TEST_SUPABASE_SERVICE_ROLE_KEY;
 import { processCsvUpload } from '../lib/csv/importLeads.js';
 import { normalizeHeader } from '../lib/csv/normalizeHeader.js';
 import { normalizeEmail, normalizePhone, constructName, sanitizeCsvValue } from '../lib/csv/normalizeLead.js';

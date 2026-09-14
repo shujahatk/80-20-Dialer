@@ -1,5 +1,9 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
+import { authenticatedFetch } from "@/lib/apiClient";
+
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import CollapsibleSidebar from '../components/CollapsibleSidebar';
@@ -15,7 +19,7 @@ export default function UserProfilePage() {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null); // { type: 'success'|'error', text: '' }
 
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     const storedUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
     if (!token || !storedUser) {
@@ -23,7 +27,7 @@ export default function UserProfilePage() {
       return;
     }
     try {
-      setUser(JSON.parse(storedUser));
+      setUser(sessionUser);
     } catch (e) {
       router.push('/login');
     }
@@ -31,7 +35,7 @@ export default function UserProfilePage() {
 
   const criteria = checkPasswordCriteria(newPassword);
 
-  const handleChangePassword = async (e) => {
+  async function handleChangePassword(e) {
     e.preventDefault();
     setStatusMsg(null);
 
@@ -49,7 +53,7 @@ export default function UserProfilePage() {
     const token = localStorage.getItem('token');
 
     try {
-      const res = await fetch('/api/auth/change-password', {
+      const res = await authenticatedFetch('/api/auth/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -72,7 +76,7 @@ export default function UserProfilePage() {
     } finally {
       setSaving(false);
     }
-  };
+  }
 
   if (!user) {
     return (
@@ -87,10 +91,10 @@ export default function UserProfilePage() {
 
   return (
     <div className="flex h-screen bg-[#07090e] text-slate-100 antialiased overflow-hidden font-sans">
-      <CollapsibleSidebar 
-        user={user} 
-        activeTab="settings" 
-        setActiveTab={(tab) => router.push(`/dashboard?tab=${tab}`)} 
+      <CollapsibleSidebar
+        user={user}
+        activeTab="settings"
+        setActiveTab={(tab) => router.push(`/dashboard?tab=${tab}`)}
       />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
@@ -109,7 +113,7 @@ export default function UserProfilePage() {
 
         {/* MAIN BODY */}
         <main className="p-6 max-w-4xl w-full mx-auto space-y-6 flex-1">
-          
+
           {/* PROFILE SUMMARY CARD */}
           <div className="bg-[#121624] border border-white/6 rounded-2xl p-6 shadow-lg shadow-black/20">
             <h2 className="text-sm font-bold text-white uppercase tracking-wider mb-4 border-b border-white/5 pb-2">

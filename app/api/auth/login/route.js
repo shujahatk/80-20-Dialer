@@ -49,7 +49,7 @@ export async function POST(req) {
     // Clear failed attempt history upon successful credentials validation
     clearLoginRateLimit(rateLimitKey);
 
-    if (!user.approved) {
+    if (!user.approved || user.active === false) {
       return NextResponse.json(
         { success: false, message: 'Your account is pending manager approval. Please wait.' },
         { status: 403 }
@@ -76,7 +76,7 @@ export async function POST(req) {
     }
 
     const { generateAuthTokens } = await import('@/lib/auth/tokenManager.js');
-    const tokens = generateAuthTokens(user);
+    const tokens = await generateAuthTokens(user);
 
     const response = NextResponse.json({
       success: true,

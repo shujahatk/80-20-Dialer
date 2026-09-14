@@ -151,7 +151,7 @@ export default function Login() {
           </form>
 
           <div className="mt-8 text-center text-sm text-slate-500">
-            Don't have an account?{' '}
+            Don&apos;t have an account?{' '}
             <Link href="/register" className="text-cyan-400 hover:text-cyan-300 font-medium transition-colors">
               Request workspace credentials
             </Link>

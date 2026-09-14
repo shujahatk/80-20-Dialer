@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { apiRequest } from '@/lib/apiClient';
@@ -14,8 +16,8 @@ export default function BlastProgressPage() {
   const [progress, setProgress] = useState({ sent: 0, failed: 0, skipped: 0, total: 0 });
   const [pollInterval, setPollInterval] = useState(null);
 
-  const fetchCampaign = async () => {
-    setLoading(true);
+  async function fetchCampaign() {
+
     try {
       const res = await apiRequest(`/api/manager/blasts/${id}`);
       if (res.success && res.data) {
@@ -27,13 +29,13 @@ export default function BlastProgressPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     const localUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
     if (!localUser || !token) { router.push('/login'); return; }
-    const parsedUser = JSON.parse(localUser);
+    const parsedUser = sessionUser;
     if (parsedUser.role === 'salesperson') { router.push('/workstation'); return; }
     // Fetch campaign and update loading state
     fetchCampaign().then(() => {
@@ -42,7 +44,7 @@ export default function BlastProgressPage() {
     });
   }, []);
 
-  const handleCancelCampaign = async () => {
+  async function handleCancelCampaign() {
     if (!confirm('Are you sure you want to cancel this campaign?')) return;
     try {
       const res = await apiRequest(`/api/manager/blasts/${id}/cancel`, 'POST');
@@ -55,7 +57,7 @@ export default function BlastProgressPage() {
     } catch (err) {
       alert(err.message || 'Failed to cancel campaign.');
     }
-  };
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -77,7 +79,7 @@ export default function BlastProgressPage() {
       }
     }, 3000);
 
-    setPollInterval(interval);
+
     return () => clearInterval(interval);
   }, [id]);
 
@@ -91,6 +93,9 @@ export default function BlastProgressPage() {
         <h1 className="text-xl font-bold text-white truncate max-w-sm">
           {campaign.name}
         </h1>
+        {campaign.status === 'needs_review' && (
+          <p className="text-sm text-amber-300">Some delivery results are uncertain. Check provider logs before resending these recipients.</p>
+        )}
         <div className="flex gap-2">
           <button
             onClick={() => router.push('/manager/blasts')}

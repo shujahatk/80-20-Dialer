@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { connectDB } from '@/lib/db';
+import { isManagerOrAdmin } from '@/lib/middleware/authGuard';
 import { BlastCampaignStore } from '@/lib/store';
 
 export async function POST(req, { params }) {
@@ -25,7 +26,7 @@ export async function POST(req, { params }) {
     }
 
     // Auth check: salesperson can only cancel their own campaigns
-    if (user.role === 'salesperson' && campaign.createdBy.toString() !== user._id.toString()) {
+    if (!isManagerOrAdmin(user) && campaign.createdBy !== user.id) {
       return NextResponse.json(
         { success: false, message: 'Unauthorized access. This is not your campaign.' },
         { status: 403 }
@@ -34,13 +35,7 @@ export async function POST(req, { params }) {
 
     // Mark campaign as cancelled and clear stats
     await BlastCampaignStore.update(id, {
-      status: 'cancelled',
-      stats: {
-        total: campaign.stats?.total || 0,
-        sent: 0,
-        failed: 0,
-        skipped: 0
-      }
+      status: 'cancelled'
     });
 
     return NextResponse.json({

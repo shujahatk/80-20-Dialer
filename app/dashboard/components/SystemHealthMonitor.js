@@ -1,19 +1,33 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { apiRequest } from '@/lib/apiClient';
+import { authenticatedFetch } from '@/lib/apiClient';
 
 export default function SystemHealthMonitor() {
   const [health, setHealth] = useState({
-    status: 'healthy',
-    api: 'Healthy',
-    database: 'Connected',
-    resend: 'Healthy',
-    twilio: 'Healthy',
-    aiCopilot: 'Healthy',
-    queueWorker: 'Active'
+    status: 'checking',
+    api: 'Checking',
+    database: 'Checking',
+    resend: 'Checking',
+    twilio: 'Checking',
+    aiCopilot: 'Checking',
+    queueWorker: 'Checking'
   });
   const [loading, setLoading] = useState(true);
+
+
+
+  function checkHealth() {
+    return authenticatedFetch('/api/health').then(response => response.json().then(res => ({ res, ok: response.ok }))).then(({ res, ok }) => {
+      setHealth({ status: res.status === 'ok' ? 'healthy' : 'degraded', api: ok ? 'Healthy' : 'Degraded',
+        database: res.services?.database === 'connected' ? 'Connected' : 'Degraded',
+        resend: res.services?.email === 'configured' ? 'Configured' : 'Missing',
+        twilio: res.services?.telephony === 'configured' ? 'Configured' : 'Missing',
+        aiCopilot: res.services?.ai === 'configured' ? 'Configured' : 'Missing',
+        queueWorker: res.services?.worker === 'running' ? 'Active' : 'Stopped' });
+    }).catch(() => setHealth({ status: 'degraded', api: 'Unavailable', database: 'Unknown', resend: 'Unknown', twilio: 'Unknown', aiCopilot: 'Unknown', queueWorker: 'Unknown' }))
+      .finally(() => setLoading(false));
+  }
 
   useEffect(() => {
     checkHealth();
@@ -21,30 +35,9 @@ export default function SystemHealthMonitor() {
     return () => clearInterval(interval);
   }, []);
 
-  const checkHealth = async () => {
-    try {
-      const res = await apiRequest('/api/health');
-      if (res) {
-        setHealth({
-          status: res.status || 'healthy',
-          api: 'Healthy',
-          database: res.database === 'connected' ? 'Connected' : 'Degraded',
-          resend: 'Healthy',
-          twilio: 'Healthy',
-          aiCopilot: 'Healthy',
-          queueWorker: 'Active'
-        });
-      }
-    } catch (e) {
-      setHealth(prev => ({ ...prev, status: 'degraded', database: 'Degraded' }));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const services = [
     { name: 'Core Next.js API Engine', status: health.api, icon: '⚡' },
-    { name: 'MongoDB Database', status: health.database, icon: '🗄️' },
+    { name: 'Supabase PostgreSQL', status: health.database, icon: '🗄️' },
     { name: 'Resend Email Gateway', status: health.resend, icon: '✉️' },
     { name: 'Twilio WebRTC Voice', status: health.twilio, icon: '📞' },
     { name: 'AI Copilot Engine', status: health.aiCopilot, icon: '🤖' },
@@ -67,7 +60,7 @@ export default function SystemHealthMonitor() {
             <div className="flex items-center justify-between">
               <span className="text-sm">{svc.icon}</span>
               <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                svc.status === 'Healthy' || svc.status === 'Connected' || svc.status === 'Active'
+                svc.status === 'Healthy' || svc.status === 'Connected' || svc.status === 'Active' || svc.status === 'Configured'
                   ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                   : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
               }`}>

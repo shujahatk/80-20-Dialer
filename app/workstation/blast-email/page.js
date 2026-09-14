@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiRequest } from '@/lib/apiClient';
@@ -48,21 +50,21 @@ export default function WorkstationBlastEmail() {
   const [telemetry, setTelemetry] = useState(null);
   const [loadingTelemetry, setLoadingTelemetry] = useState(false);
 
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     const localUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
     if (!localUser || !token) {
       router.push('/login');
       return;
     }
-    const parsedUser = JSON.parse(localUser);
+    const parsedUser = sessionUser;
     setUser(parsedUser);
     setTestEmail(parsedUser.email || '');
 
     fetchData();
   }, [router]);
 
-  const fetchData = async () => {
+  async function fetchData() {
     setLoading(true);
     try {
       // Load Leads
@@ -86,9 +88,9 @@ export default function WorkstationBlastEmail() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const fetchCampaigns = async () => {
+  async function fetchCampaigns() {
     try {
       const res = await apiRequest('/api/workstation/blasts', 'GET');
       if (res.success && res.data) {
@@ -97,7 +99,7 @@ export default function WorkstationBlastEmail() {
     } catch (e) {
       console.error('Error loading campaigns:', e);
     }
-  };
+  }
 
   // Filtered Leads calculation
   const filteredLeads = useMemo(() => {
@@ -142,15 +144,15 @@ export default function WorkstationBlastEmail() {
     };
   }, [filteredLeads, leadSelectionMap, leads.length]);
 
-  const handleSelectAll = (checked) => {
+  function handleSelectAll(checked) {
     const newMap = { ...leadSelectionMap };
     filteredLeads.forEach(l => {
       newMap[l._id] = checked;
     });
     setLeadSelectionMap(newMap);
-  };
+  }
 
-  const handleSendTestEmail = async () => {
+  async function handleSendTestEmail() {
     if (!testEmail) return;
     setSendingTest(true);
     setTestResult({ success: null, message: '' });
@@ -172,9 +174,9 @@ export default function WorkstationBlastEmail() {
     } finally {
       setSendingTest(false);
     }
-  };
+  }
 
-  const handleLaunchCampaign = async () => {
+  async function handleLaunchCampaign() {
     setSubmitting(true);
     setSubmitError('');
     try {
@@ -210,9 +212,9 @@ export default function WorkstationBlastEmail() {
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
-  const fetchTelemetry = async (campaignId) => {
+  async function fetchTelemetry(campaignId) {
     if (!campaignId) return;
     setLoadingTelemetry(true);
     try {
@@ -225,9 +227,9 @@ export default function WorkstationBlastEmail() {
     } finally {
       setLoadingTelemetry(false);
     }
-  };
+  }
 
-  const handleToggleState = async (action) => {
+  async function handleToggleState(action) {
     if (!selectedCampaignId) return;
     try {
       const res = await apiRequest(`/api/workstation/blasts/${selectedCampaignId}`, 'PUT', { action });
@@ -238,11 +240,11 @@ export default function WorkstationBlastEmail() {
     } catch (e) {
       alert('Failed to update campaign state: ' + e.message);
     }
-  };
+  }
 
-  const insertVariable = (varName) => {
+  function insertVariable(varName) {
     setTemplateBody(prev => prev + ` {{${varName}}}`);
-  };
+  }
 
   if (loading) {
     return (
@@ -336,7 +338,7 @@ export default function WorkstationBlastEmail() {
             {step === 1 && (
               <div className="bg-[#121524] border border-white/10 rounded-2xl p-6 space-y-5">
                 <h2 className="text-lg font-bold text-white">Campaign & Messaging Details</h2>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 mb-1">Campaign Name *</label>
@@ -490,7 +492,7 @@ export default function WorkstationBlastEmail() {
                             />
                           </td>
                           <td className="p-2.5 font-medium text-white">{lead.contact?.name || lead.name || 'N/A'}</td>
-                          <td className="p-2.5">{lead.company?.name || lead.company || '—'}</td>
+                          <td className="p-2.5">{lead.company?.name || (typeof lead.company === 'string' ? lead.company : '—')}</td>
                           <td className="p-2.5">{lead.contact?.email || lead.email || 'No email'}</td>
                           <td className="p-2.5 capitalize">{lead.status || 'new'}</td>
                         </tr>

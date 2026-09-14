@@ -1,3 +1,9 @@
+
+if (process.env.ALLOW_LEGACY_INTEGRATION_TESTS !== '1' || !process.env.TEST_SUPABASE_URL || !process.env.TEST_SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('Legacy integration scripts mutate records and may send messages. Use an isolated test Supabase project with TEST_SUPABASE_URL, TEST_SUPABASE_SERVICE_ROLE_KEY, and ALLOW_LEGACY_INTEGRATION_TESTS=1. npm test runs isolated regression tests.');
+}
+process.env.SUPABASE_URL = process.env.TEST_SUPABASE_URL;
+process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.TEST_SUPABASE_SERVICE_ROLE_KEY;
 /**
  * ==============================================================================
  * 80/20 OUTBOUND SYSTEM — MASTER TWILIO VOICE & SMS TEST SUITE
@@ -9,15 +15,15 @@
 import crypto from 'crypto';
 import assert from 'assert';
 import { validateTwilioConfig, validateEnvironment } from '../lib/envConfig.js';
-import { 
-  generateVoiceToken, 
-  makeOutboundCall, 
-  sendSmsMessage, 
-  getCallStatus 
+import {
+  generateVoiceToken,
+  makeOutboundCall,
+  sendSmsMessage,
+  getCallStatus
 } from '../lib/twilioService.js';
-import { 
-  validateTwilioSignature, 
-  verifyTwilioRequest 
+import {
+  validateTwilioSignature,
+  verifyTwilioRequest
 } from '../lib/security/webhookSecurity.js';
 import { validatePhoneNumber } from '../lib/phoneValidator.js';
 import { SuppressionStore } from '../lib/suppression/suppressionStore.js';

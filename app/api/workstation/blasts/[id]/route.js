@@ -1,166 +1,45 @@
 import { NextResponse } from 'next/server';
-import { requireAuth, canAccessResource } from '@/lib/middleware/authGuard';
-import { connectDB } from '@/lib/db';
-import BlastCampaign from '@/models/BlastCampaign';
-import Message from '@/models/Message';
+import { requireAuth, isManagerOrAdmin } from '@/lib/middleware/authGuard';
+import { BlastCampaignStore, MessageStore } from '@/lib/store';
 import { logAuditEvent } from '@/lib/auditLogger';
-
+async function access(req, params) {
+  const auth = await requireAuth(req, ['owner', 'manager', 'admin', 'salesperson']);
+  if (auth.errorResponse) return { response: auth.errorResponse };
+  const { id } = await params;
+  const campaign = await BlastCampaignStore.findById(id);
+  if (!campaign) return { response: NextResponse.json({ success: false, message: 'Campaign not found.' }, { status: 404 }) };
+  if (!isManagerOrAdmin(auth.user) && campaign.createdBy !== auth.user.id) return { response: NextResponse.json({ success: false, message: 'Forbidden.' }, { status: 403 }) };
+  return { user: auth.user, campaign, id };
+}
 export async function GET(req, { params }) {
   try {
-    const { user, errorResponse } = await requireAuth(req);
-    if (errorResponse) return errorResponse;
-
-    const { id } = await params;
-    await connectDB();
-
-    const campaign = await BlastCampaign.findById(id).lean();
-    if (!campaign) {
-      return NextResponse.json(
-        { success: false, error: { code: 'NOT_FOUND', message: 'Campaign not found.' } },
-        { status: 404 }
-      );
-    }
-
-    if (!canAccessResource(user, campaign.createdBy)) {
-      return NextResponse.json(
-        { success: false, error: { code: 'FORBIDDEN', message: 'You are not authorized to view this campaign.' } },
-        { status: 403 }
-      );
-    }
-
-    // Fetch recent message logs for live telemetry detail
-    const logs = await Message.find({ blastCampaignId: id }).sort({ createdAt: -1 }).limit(50).lean();
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        campaign,
-        recentLogs: logs
-      }
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { success: false, error: { code: 'SERVER_ERROR', message: err.message || 'Failed to fetch campaign telemetry.' } },
-      { status: 500 }
-    );
-  }
+    const result = await access(req, params);
+    if (result.response) return result.response;
+    const logs = await MessageStore.findByCampaignId(result.id);
+    return NextResponse.json({ success: true, data: { campaign: result.campaign, recentLogs: logs.slice(0, 50) } });
+  } catch (error) { return NextResponse.json({ success: false, message: error.message }, { status: 500 }); }
 }
-
 export async function PUT(req, { params }) {
   try {
-    const { user, errorResponse } = await requireAuth(req);
-    if (errorResponse) return errorResponse;
-
-    const { id } = await params;
-    await connectDB();
-
-    const campaign = await BlastCampaign.findById(id);
-    if (!campaign) {
-      return NextResponse.json(
-        { success: false, error: { code: 'NOT_FOUND', message: 'Campaign not found.' } },
-        { status: 404 }
-      );
-    }
-
-    if (!canAccessResource(user, campaign.createdBy)) {
-      return NextResponse.json(
-        { success: false, error: { code: 'FORBIDDEN', message: 'You are not authorized to modify this campaign.' } },
-        { status: 403 }
-      );
-    }
-
-    const body = await req.json();
-    const { action } = body; // 'pause' | 'resume' | 'cancel'
-
-    if (!['pause', 'resume', 'cancel'].includes(action)) {
-      return NextResponse.json(
-        { success: false, error: { code: 'VALIDATION_ERROR', message: 'Action must be pause, resume, or cancel.' } },
-        { status: 400 }
-      );
-    }
-
-    // Deterministic state machine transitions
-    if (action === 'pause') {
-      if (['processing', 'queued', 'running'].includes(campaign.status)) {
-        campaign.status = 'paused';
-      }
-    } else if (action === 'resume') {
-      if (campaign.status === 'paused') {
-        campaign.status = 'queued';
-      }
-    } else if (action === 'cancel') {
-      if (!['completed', 'cancelled'].includes(campaign.status)) {
-        campaign.status = 'cancelled';
-        campaign.completedAt = new Date();
-      }
-    }
-
-    await campaign.save();
-
-    await logAuditEvent({
-      userId: user._id,
-      action: 'note',
-      notes: `Updated Blast Campaign '${campaign.name}' status to ${campaign.status} via action '${action}'.`
-    });
-
-    return NextResponse.json({
-      success: true,
-      data: campaign
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { success: false, error: { code: 'SERVER_ERROR', message: err.message || 'Failed to update campaign state.' } },
-      { status: 500 }
-    );
-  }
+    const result = await access(req, params);
+    if (result.response) return result.response;
+    const { action } = await req.json();
+    const allowed = { pause: ['queued', 'processing'], resume: ['paused'], cancel: ['draft', 'queued', 'processing', 'paused', 'needs_review', 'failed'] };
+    if (!allowed[action]) return NextResponse.json({ success: false, message: 'Action must be pause, resume, or cancel.' }, { status: 400 });
+    if (!allowed[action].includes(result.campaign.status)) return NextResponse.json({ success: false, message: 'Invalid campaign transition.' }, { status: 409 });
+    const status = { pause: 'paused', resume: 'queued', cancel: 'cancelled' }[action];
+    const campaign = await BlastCampaignStore.update(result.id, { status });
+    await logAuditEvent({ userId: result.user.id, action: 'CAMPAIGN_UPDATED', entityType: 'campaign', entityId: result.id, notes: status, req });
+    return NextResponse.json({ success: true, data: campaign });
+  } catch (error) { return NextResponse.json({ success: false, message: error.message }, { status: 500 }); }
 }
-
 export async function DELETE(req, { params }) {
   try {
-    const { user, errorResponse } = await requireAuth(req);
-    if (errorResponse) return errorResponse;
-
-    const { id } = await params;
-    await connectDB();
-
-    const campaign = await BlastCampaign.findById(id);
-    if (!campaign) {
-      return NextResponse.json(
-        { success: false, error: { code: 'NOT_FOUND', message: 'Campaign not found.' } },
-        { status: 404 }
-      );
-    }
-
-    if (!canAccessResource(user, campaign.createdBy)) {
-      return NextResponse.json(
-        { success: false, error: { code: 'FORBIDDEN', message: 'You are not authorized to delete this campaign.' } },
-        { status: 403 }
-      );
-    }
-
-    // Preserve historical auditability: Soft-delete active/queued dispatches by marking as cancelled
-    if (['queued', 'processing', 'running', 'paused'].includes(campaign.status)) {
-      campaign.status = 'cancelled';
-      campaign.completedAt = new Date();
-      await campaign.save();
-    } else if (campaign.status === 'draft') {
-      await BlastCampaign.deleteOne({ _id: id });
-    }
-
-    await logAuditEvent({
-      userId: user._id,
-      action: 'note',
-      notes: `Cancelled/removed Blast Campaign '${campaign.name}' (ID: ${id}).`
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: 'Campaign state safely updated.'
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { success: false, error: { code: 'SERVER_ERROR', message: err.message || 'Failed to remove campaign.' } },
-      { status: 500 }
-    );
-  }
+    const result = await access(req, params);
+    if (result.response) return result.response;
+    if (result.campaign.status === 'draft') await BlastCampaignStore.delete(result.id);
+    else if (!['completed', 'cancelled'].includes(result.campaign.status)) await BlastCampaignStore.update(result.id, { status: 'cancelled' });
+    await logAuditEvent({ userId: result.user.id, action: 'CAMPAIGN_REMOVED', entityType: 'campaign', entityId: result.id, req });
+    return NextResponse.json({ success: true, message: 'Campaign state safely updated.' });
+  } catch (error) { return NextResponse.json({ success: false, message: error.message }, { status: 500 }); }
 }

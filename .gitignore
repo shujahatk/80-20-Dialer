@@ -24,6 +24,7 @@
 .env.local
 .env.production
 .env.development
+!.env.example
 *.pem
 *.key
 *.cert

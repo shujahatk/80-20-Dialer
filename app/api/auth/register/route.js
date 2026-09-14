@@ -1,92 +1,22 @@
 import { NextResponse } from 'next/server';
-import { connectDB } from '@/lib/db';
 import { UserStore } from '@/lib/store';
-import { checkRateLimit } from '@/lib/rateLimiter';
+import { checkRateLimitAsync } from '@/lib/rateLimiter';
+import { validatePasswordStrength } from '@/lib/auth/passwordValidator';
 import { logAuditEvent } from '@/lib/auditLogger';
-
 export async function POST(req) {
   try {
     const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
-    const rateCheck = checkRateLimit(`register_${ip}`, 5, 60000);
-    if (!rateCheck.success) return rateCheck.errorResponse;
-
-    await connectDB();
-    const body = await req.json();
-    const { name, email, password, role } = body;
-
-    if (!name || !email || !password) {
-      return NextResponse.json(
-        { success: false, message: 'Please provide name, email, and password.' },
-        { status: 400 }
-      );
-    }
-
-    // Validate enterprise password complexity
-    const { validatePasswordStrength } = await import('@/lib/auth/passwordValidator.js');
-    const pwdValidation = validatePasswordStrength(password);
-    if (!pwdValidation.valid) {
-      return NextResponse.json(
-        { success: false, message: pwdValidation.error },
-        { status: 400 }
-      );
-    }
-
-    if (role && !['owner', 'manager', 'salesperson', 'admin'].includes(role)) {
-      return NextResponse.json(
-        { success: false, message: 'Invalid role. Must be one of: owner, manager, salesperson, admin.' },
-        { status: 400 }
-      );
-    }
-
-    const userExists = await UserStore.findOne({ email: email.toLowerCase() });
-    if (userExists) {
-      return NextResponse.json(
-        { success: false, message: 'An account with this email already exists. Please sign in.' },
-        { status: 400 }
-      );
-    }
-
-    // Auto-approve first user as owner; require admin approval for all other new users
-    const allUsers = await UserStore.findAllUsers();
-    const isFirstUser = allUsers.length === 0;
-
-    const user = await UserStore.create({
-      name,
-      email: email.toLowerCase(),
-      password,
-      role: isFirstUser ? 'owner' : (role || 'salesperson'),
-      approved: isFirstUser
-    });
-
-    await logAuditEvent({
-      userId: user._id,
-      action: 'USER_REGISTERED',
-      entityType: 'auth',
-      notes: `New user account registered (${user.email}) as ${user.role}. Approved: ${user.approved}`,
-      req
-    });
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: isFirstUser 
-          ? 'First account created and approved as Owner.'
-          : 'Account registered successfully. Account is pending administrator approval before you can log in.',
-        data: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          approved: user.approved,
-          createdAt: user.createdAt
-        }
-      },
-      { status: 201 }
-    );
-  } catch (err) {
-    return NextResponse.json(
-      { success: false, message: err.message || 'Server error occurred.' },
-      { status: 500 }
-    );
-  }
+    const rate = await checkRateLimitAsync('register_' + ip, 5, 60000);
+    if (!rate.success) return rate.errorResponse;
+    const { name, email, password } = await req.json();
+    if (typeof name !== 'string' || !name.trim() || typeof email !== 'string' || !email.includes('@')) return NextResponse.json({ success: false, message: 'Name and email are required.' }, { status: 400 });
+    const validation = validatePasswordStrength(password);
+    if (!validation.valid) return NextResponse.json({ success: false, message: validation.error }, { status: 400 });
+    if (await UserStore.findOne({ email })) return NextResponse.json({ success: false, message: 'An account with this email already exists.' }, { status: 409 });
+    // First owner selection is serialized in PostgreSQL; public registration never accepts privileged roles.
+    const user = await UserStore.register({ name, email, password });
+    await logAuditEvent({ userId: user.id, action: 'USER_REGISTERED', entityType: 'auth', notes: user.email, req });
+    return NextResponse.json({ success: true, message: user.approved ? 'Owner account created and approved.' : 'Account registered. Administrator approval is required.',
+      data: { _id: user.id, name: user.name, email: user.email, role: user.role, approved: user.approved, createdAt: user.createdAt } }, { status: 201 });
+  } catch (error) { return NextResponse.json({ success: false, message: error.message }, { status: 500 }); }
 }

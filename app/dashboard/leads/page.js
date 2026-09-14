@@ -1,5 +1,9 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
+import { authenticatedFetch } from "@/lib/apiClient";
+
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import CollapsibleSidebar from '../components/CollapsibleSidebar';
@@ -66,23 +70,23 @@ export default function LeadManagementHub() {
   // Filter & Search
   const [searchQuery, setSearchQuery] = useState('');
 
-  const showNotification = (message, type = 'success') => {
+  function showNotification(message, type = 'success') {
     setNotification({ message, type });
     if (type === 'success') {
       setTimeout(() => {
         setNotification(prev => prev.message === message ? { message: '', type: '' } : prev);
       }, 5000);
     }
-  };
+  }
 
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     const storedUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
     if (!token || !storedUser) {
       router.push('/login');
       return;
     }
-    const u = JSON.parse(storedUser);
+    const u = sessionUser;
     if (!['owner', 'manager', 'admin'].includes(u.role)) {
       router.push('/workstation');
       return;
@@ -101,7 +105,7 @@ export default function LeadManagementHub() {
     fetchDataSilent();
   });
 
-  const apiRequest = async (url, method = 'GET', body = null, isFormData = false) => {
+  async function apiRequest(url, method = 'GET', body = null, isFormData = false) {
     const token = localStorage.getItem('token');
     const headers = { Authorization: `Bearer ${token}` };
     if (!isFormData) headers['Content-Type'] = 'application/json';
@@ -109,13 +113,13 @@ export default function LeadManagementHub() {
     const opts = { method, headers };
     if (body) opts.body = isFormData ? body : JSON.stringify(body);
 
-    const res = await fetch(url, opts);
+    const res = await authenticatedFetch(url, opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message || 'API request failed.');
     return data;
-  };
+  }
 
-  const fetchData = async () => {
+  async function fetchData() {
     setLoading(true);
     try {
       const [usersRes, unassignedRes, allRes] = await Promise.all([
@@ -135,9 +139,9 @@ export default function LeadManagementHub() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const fetchDataSilent = async () => {
+  async function fetchDataSilent() {
     try {
       const [usersRes, unassignedRes, allRes] = await Promise.all([
         apiRequest('/api/manager/users').catch(() => ({ success: false })),
@@ -152,7 +156,7 @@ export default function LeadManagementHub() {
       if (unassignedRes.success && unassignedRes.data) setUnassignedLeads(unassignedRes.data);
       if (allRes.success && allRes.data) setAllLeads(allRes.data);
     } catch (err) {}
-  };
+  }
 
   // Filtered Lists
   const filteredUnassigned = useMemo(() => {
@@ -179,29 +183,29 @@ export default function LeadManagementHub() {
 
   const currentDisplayedLeads = activeTab === 'unassigned' ? filteredUnassigned : filteredAllLeads;
 
-  const handleSelectAll = (e) => {
+  function handleSelectAll(e) {
     if (e.target.checked) {
       const ids = currentDisplayedLeads.map(l => l._id || l.id);
       setSelectedLeadIds(ids);
     } else {
       setSelectedLeadIds([]);
     }
-  };
+  }
 
-  const handleSelectRow = (id) => {
+  function handleSelectRow(id) {
     setSelectedLeadIds(prev =>
       prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
     );
-  };
+  }
 
   // Delete Action Modals
-  const openSingleDeleteModal = (lead) => {
+  function openSingleDeleteModal(lead) {
     setLeadToDelete(lead);
     setIsBulkDelete(false);
     setDeleteModalOpen(true);
-  };
+  }
 
-  const openBulkDeleteModal = () => {
+  function openBulkDeleteModal() {
     if (selectedLeadIds.length === 0) {
       showNotification('Please select at least one lead to delete.', 'error');
       return;
@@ -209,9 +213,9 @@ export default function LeadManagementHub() {
     setLeadToDelete(null);
     setIsBulkDelete(true);
     setDeleteModalOpen(true);
-  };
+  }
 
-  const handleConfirmDelete = async () => {
+  async function handleConfirmDelete() {
     setDeleting(true);
     try {
       if (isBulkDelete) {
@@ -245,10 +249,10 @@ export default function LeadManagementHub() {
     } finally {
       setDeleting(false);
     }
-  };
+  }
 
   // Bulk Dispatch
-  const handleBulkDispatch = async () => {
+  async function handleBulkDispatch() {
     if (selectedLeadIds.length === 0) {
       showNotification('Please select at least one lead to dispatch.', 'error');
       return;
@@ -281,10 +285,10 @@ export default function LeadManagementHub() {
     } finally {
       setDispatching(false);
     }
-  };
+  }
 
   // CSV File Selection & Auto Preview
-  const handleFileChange = async (e) => {
+  async function handleFileChange(e) {
     const file = e.target.files?.[0];
     setSelectedFile(file || null);
     setPreviewData(null);
@@ -295,10 +299,10 @@ export default function LeadManagementHub() {
     if (file) {
       await generateCsvPreview(file, {});
     }
-  };
+  }
 
   // Generate CSV Preview & Column Mapping Analysis
-  const generateCsvPreview = async (file, overrides = {}) => {
+  async function generateCsvPreview(file, overrides = {}) {
     setPreviewing(true);
     setUploadError('');
     try {
@@ -328,19 +332,19 @@ export default function LeadManagementHub() {
     } finally {
       setPreviewing(false);
     }
-  };
+  }
 
   // Handle Manual Mapping Change
-  const handleMappingChange = (rawHeader, newTargetField) => {
+  function handleMappingChange(rawHeader, newTargetField) {
     const updated = { ...manualMappings, [rawHeader]: newTargetField };
     setManualMappings(updated);
     if (selectedFile) {
       generateCsvPreview(selectedFile, updated);
     }
-  };
+  }
 
   // Execute Final CSV Import
-  const handleFinalImport = async () => {
+  async function handleFinalImport() {
     if (!selectedFile) {
       setUploadError('Please select a CSV file to import.');
       return;
@@ -377,7 +381,7 @@ export default function LeadManagementHub() {
     } finally {
       setUploading(false);
     }
-  };
+  }
 
   return (
     <div className="flex h-screen bg-[#07090e] text-slate-100 font-sans overflow-hidden">
@@ -487,7 +491,7 @@ export default function LeadManagementHub() {
                     )}
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Select leads to dispatch directly to a rep's queue or permanently delete unneeded records.
+                    Select leads to dispatch directly to a rep&apos;s queue or permanently delete unneeded records.
                   </p>
                 </div>
 
@@ -579,7 +583,7 @@ export default function LeadManagementHub() {
                               />
                             </td>
                             <td className="p-3 font-semibold text-white">{lead.contact?.name || lead.name || 'N/A'}</td>
-                            <td className="p-3">{lead.company?.name || lead.company || '—'}</td>
+                            <td className="p-3">{lead.company?.name || (typeof lead.company === 'string' ? lead.company : '—')}</td>
                             <td className="p-3 font-mono text-slate-300">{lead.contact?.email || lead.email || '—'}</td>
                             <td className="p-3 font-mono text-slate-300">{lead.contact?.phone || lead.phone || '—'}</td>
                             <td className="p-3">{lead.city || lead.geography?.city || '—'}, {lead.country || lead.geography?.country || '—'}</td>
@@ -761,7 +765,7 @@ export default function LeadManagementHub() {
                       <h3 className="text-base font-bold text-white flex items-center gap-2">
                         <span>🔍 CSV Analysis & Column Mapping</span>
                         <span className="text-[10px] text-slate-400 bg-white/5 px-2 py-0.5 rounded-md">
-                          Delimiter: '{previewData.delimiter === '\t' ? 'TAB' : previewData.delimiter}'
+                          Delimiter: &apos;{previewData.delimiter === '\t' ? 'TAB' : previewData.delimiter}&apos;
                         </span>
                       </h3>
                       <p className="text-xs text-slate-400">
@@ -861,7 +865,7 @@ export default function LeadManagementHub() {
                                 <td className="p-2.5 font-semibold text-white">{lead.name || 'N/A'}</td>
                                 <td className="p-2.5 font-mono text-slate-300">{lead.email || '—'}</td>
                                 <td className="p-2.5 font-mono text-slate-300">{lead.phone || '—'}</td>
-                                <td className="p-2.5">{lead.company || '—'}</td>
+                                <td className="p-2.5">{lead.company?.name || (typeof lead.company === 'string' ? lead.company : '—')}</td>
                                 <td className="p-2.5 text-slate-400">{lead.position || lead.niche || '—'}</td>
                                 <td className="p-2.5">{[lead.city, lead.country].filter(Boolean).join(', ') || '—'}</td>
                               </tr>
@@ -978,7 +982,7 @@ export default function LeadManagementHub() {
                               />
                             </td>
                             <td className="p-3 font-semibold text-white">{lead.contact?.name || lead.name || 'N/A'}</td>
-                            <td className="p-3">{lead.company?.name || lead.company || '—'}</td>
+                            <td className="p-3">{lead.company?.name || (typeof lead.company === 'string' ? lead.company : '—')}</td>
                             <td className="p-3 font-mono">{lead.contact?.email || lead.email || lead.phone || '—'}</td>
                             <td className="p-3 capitalize">
                               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1049,7 +1053,7 @@ export default function LeadManagementHub() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Company:</span>
-                    <span className="text-slate-200">{leadToDelete.company?.name || leadToDelete.company || '—'}</span>
+                    <span className="text-slate-200">{leadToDelete.company?.name || (typeof leadToDelete.company === 'string' ? leadToDelete.company : '—')}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">Contact:</span>

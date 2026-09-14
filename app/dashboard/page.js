@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuthenticatedEffect } from "@/hooks/useAuthenticatedEffect";
+
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiRequest } from '@/lib/apiClient';
@@ -53,19 +55,19 @@ export default function Dashboard() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
 
-  useEffect(() => {
+  useAuthenticatedEffect((sessionUser) => {
     setIsMounted(true);
     const localUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
-    if (!localUser || !token) { 
-      router.push('/login'); 
-      return; 
+    if (!localUser || !token) {
+      router.push('/login');
+      return;
     }
     try {
-      const parsedUser = JSON.parse(localUser);
-      if (parsedUser.role === 'salesperson') { 
-        router.push('/workstation'); 
-        return; 
+      const parsedUser = sessionUser;
+      if (parsedUser.role === 'salesperson') {
+        router.push('/workstation');
+        return;
       }
       setUser(parsedUser);
     } catch {
@@ -90,7 +92,7 @@ export default function Dashboard() {
     fetchSilentData();
   });
 
-  const fetchSilentData = async () => {
+  async function fetchSilentData() {
     try {
       const [
         metricsRes,
@@ -112,9 +114,9 @@ export default function Dashboard() {
       if (alertsRes.success && alertsRes.data) setAlerts(alertsRes.data);
       if (onlineRes.success && onlineRes.data) setOnlineUsers(onlineRes.data);
     } catch (e) {}
-  };
+  }
 
-  const fetchAllData = async () => {
+  async function fetchAllData() {
     setStatsLoading(true);
     try {
       const [
@@ -146,20 +148,20 @@ export default function Dashboard() {
       if (alertsRes.success && alertsRes.data) setAlerts(alertsRes.data);
       if (onlineRes.success && onlineRes.data) setOnlineUsers(onlineRes.data);
 
-      const activeSalesUsers = (usersRes.success && Array.isArray(usersRes.data)) 
-        ? usersRes.data.filter(u => u.role === 'salesperson' && u.approved !== false) 
+      const activeSalesUsers = (usersRes.success && Array.isArray(usersRes.data))
+        ? usersRes.data.filter(u => u.role === 'salesperson' && u.approved !== false)
         : [];
 
       const initialInboxes = [
-        { 
-          _id: 'default', 
-          name: 'Primary Outbound Identity (Resend)', 
-          fromEmail: 'outreach@8020acquisition.com', 
-          fromName: '80/20 Acquisition', 
-          dailyLimit: 500, 
-          sentToday: metricsRes.data?.emailsSent || 0, 
-          status: 'active', 
-          domainStatus: 'verified' 
+        {
+          _id: 'default',
+          name: 'Primary Outbound Identity (Resend)',
+          fromEmail: 'outreach@8020acquisition.com',
+          fromName: '80/20 Acquisition',
+          dailyLimit: 500,
+          sentToday: metricsRes.data?.emailsSent || 0,
+          status: 'active',
+          domainStatus: 'verified'
         },
         ...activeSalesUsers.map(u => ({
           _id: String(u._id || u.id),
@@ -179,7 +181,7 @@ export default function Dashboard() {
     } finally {
       setStatsLoading(false);
     }
-  };
+  }
 
   // Filtered Leads
   const filteredLeads = useMemo(() => {
@@ -193,32 +195,32 @@ export default function Dashboard() {
   }, [leads, searchQuery]);
 
   // 0ms Instant Optimistic Actions
-  const handleApproveUser = async (userId) => {
+  async function handleApproveUser(userId) {
     // Instant 0ms local state update
     setRegisteredUsers(prev => prev.map(u => u._id === userId ? { ...u, approved: true } : u));
     try {
       await apiRequest('/api/manager/users', 'PUT', { userId, action: 'approve' });
     } catch (err) { alert(err.message || 'Approval failed'); }
-  };
+  }
 
-  const handleRoleChange = async (userId, role) => {
+  async function handleRoleChange(userId, role) {
     // Instant 0ms local state update
     setRegisteredUsers(prev => prev.map(u => u._id === userId ? { ...u, role } : u));
     try {
       await apiRequest('/api/manager/users', 'PUT', { userId, action: 'role', role });
     } catch (err) { alert(err.message || 'Role update failed'); }
-  };
+  }
 
-  const handleRejectUser = async (userId) => {
+  async function handleRejectUser(userId) {
     if (!confirm('Remove this user from the system?')) return;
     // Instant 0ms local state update
     setRegisteredUsers(prev => prev.filter(u => u._id !== userId));
     try {
       await apiRequest(`/api/manager/users?userId=${userId}`, 'DELETE');
     } catch (err) { alert(err.message || 'Removal failed'); }
-  };
+  }
 
-  const handleSaveSettings = async (e) => {
+  async function handleSaveSettings(e) {
     e.preventDefault();
     setSavingSettings(true);
     setSettingsSuccess('');
@@ -233,9 +235,9 @@ export default function Dashboard() {
     } finally {
       setSavingSettings(false);
     }
-  };
+  }
 
-  const handleReassignLead = async (leadId, newAssigneeId) => {
+  async function handleReassignLead(leadId, newAssigneeId) {
     // Instant 0ms local state update
     setLeads(prev => prev.map(l => (l._id === leadId || l.id === leadId) ? { ...l, assignedTo: newAssigneeId, assigned_to: newAssigneeId } : l));
     try {
@@ -243,9 +245,9 @@ export default function Dashboard() {
     } catch (err) {
       alert(err.message || 'Failed to reassign lead.');
     }
-  };
+  }
 
-  const handleCsvUpload = async (e) => {
+  async function handleCsvUpload(e) {
     e.preventDefault();
     if (!selectedFile) { setUploadError('Please choose a CSV file first.'); return; }
     setUploading(true); setUploadError(''); setUploadResult(null);
@@ -263,7 +265,7 @@ export default function Dashboard() {
       }
     } catch (err) { setUploadError(err.message || 'Import failed.'); }
     finally { setUploading(false); }
-  };
+  }
 
   if (!isMounted || !user) {
     return (

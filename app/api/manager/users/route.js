@@ -171,6 +171,7 @@ export async function PUT(req) {
       const hashedPassword = await bcrypt.hash(newPassword, salt);
       updated = await UserStore.update(userId, {
         password: hashedPassword,
+        tokenVersion: (targetUser.tokenVersion || 1) + 1,
         password_changed_at: new Date().toISOString()
       });
       await logAuditEvent({

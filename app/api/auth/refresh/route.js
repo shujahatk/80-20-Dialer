@@ -1,52 +1,21 @@
 import { NextResponse } from 'next/server';
-import { rotateRefreshToken } from '@/lib/auth/tokenManager.js';
-import { logAuditEvent } from '@/lib/auditLogger.js';
-
+import { rotateRefreshToken } from '@/lib/auth/tokenManager';
+import { extractCookie } from '@/lib/auth';
+import { setAuthCookies } from '@/lib/auth/cookies';
 export async function POST(req) {
   try {
-    const authHeader = req.headers.get('authorization');
-    let refreshToken = null;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      refreshToken = authHeader.split(' ')[1];
-    } else {
-      const body = await req.json().catch(() => ({}));
-      refreshToken = body.refreshToken;
-    }
-
-    if (!refreshToken) {
-      return NextResponse.json(
-        { success: false, message: 'Refresh token is required.' },
-        { status: 400 }
-      );
-    }
-
-    const result = await rotateRefreshToken(refreshToken);
-    if (!result.success) {
-      return NextResponse.json(
-        { success: false, message: result.message },
-        { status: result.status || 401 }
-      );
-    }
-
-    await logAuditEvent({
-      userId: result.data.user._id,
-      action: 'TOKEN_ROTATED',
-      entityType: 'auth',
-      notes: `Sliding session token refreshed for ${result.data.user.email}`,
-      req
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: 'Session token refreshed successfully.',
-      data: result.data
-    });
-  } catch (err) {
-    console.error('[Refresh Token API Error]:', err);
-    return NextResponse.json(
-      { success: false, message: err.message || 'Server error refreshing token.' },
-      { status: 500 }
-    );
+    const origin = req.headers.get('origin');
+    const expectedOrigin = process.env.APP_URL ? new URL(process.env.APP_URL).origin : new URL(req.url).origin;
+    if (origin && origin !== expectedOrigin) return NextResponse.json({ success: false, message: 'Invalid request origin.' }, { status: 403 });
+    const header = req.headers.get('authorization');
+    const body = await req.json().catch(() => ({}));
+    const token = header?.startsWith('Bearer ') ? header.slice(7) : extractCookie(req, 'refreshToken') || body.refreshToken;
+    if (!token) return setAuthCookies(NextResponse.json({ success: false, message: 'Refresh token required.' }, { status: 401 }), null);
+    const result = await rotateRefreshToken(token);
+    if (!result.success) return setAuthCookies(NextResponse.json({ success: false, message: result.message }, { status: result.status || 401 }), null);
+    return setAuthCookies(NextResponse.json({ success: true, data: result.data }), result.data);
+  } catch (error) {
+    console.error('[Session refresh]', error.message);
+    return NextResponse.json({ success: false, message: 'Session refresh unavailable. Try again shortly.' }, { status: 503 });
   }
 }

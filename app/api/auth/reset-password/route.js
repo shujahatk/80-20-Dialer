@@ -26,8 +26,7 @@ export async function POST(req) {
     }
 
     // Find user by reset token
-    const allUsers = await UserStore.findAllUsers();
-    const user = allUsers.find(u => u.reset_password_token === token);
+    const user = await UserStore.findByResetToken(token);
 
     if (!user) {
       return NextResponse.json(
@@ -39,7 +38,7 @@ export async function POST(req) {
     // Check expiration (15-minute window)
     const now = Date.now();
     const expiresAt = new Date(user.reset_password_expires_at || 0).getTime();
-    if (now > expiresAt) {
+    if (!user.reset_password_expires_at || !Number.isFinite(expiresAt) || now >= expiresAt) {
       return NextResponse.json(
         { success: false, message: 'Password reset token has expired. Please request a new one.' },
         { status: 400 }

@@ -1,59 +1,19 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
+import { requireAuth, isManagerOrAdmin } from '@/lib/middleware/authGuard';
 import { ActivityLogStore, UserStore } from '@/lib/store';
-import { isMongoConnected } from '@/lib/db';
-import ActivityLog from '@/models/ActivityLog';
-
 export async function GET(req) {
   try {
-    const user = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized access.' },
-        { status: 401 }
-      );
+    const { user, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
+    const limit = Math.min(500, Math.max(1, Number(new URL(req.url).searchParams.get('limit')) || 50));
+    let logs;
+    if (!isManagerOrAdmin(user)) logs = await ActivityLogStore.findByUser(user.id, limit);
+    else {
+      const users = await UserStore.findAllUsers();
+      logs = (await Promise.all(users.map(async owner => (await ActivityLogStore.findByUser(owner.id, limit))
+        .map(log => ({ ...log, userId: { _id: owner.id, name: owner.name } }))))).flat()
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, limit);
     }
-
-    const { searchParams } = new URL(req.url);
-    const limit = parseInt(searchParams.get('limit')) || 50;
-
-    let logs = [];
-
-    if (user.role === 'salesperson') {
-      logs = await ActivityLogStore.findByUser(user._id, limit);
-    } else {
-      if (isMongoConnected()) {
-        logs = await ActivityLog.find()
-          .sort({ timestamp: -1 })
-          .limit(limit)
-          .populate('userId', 'name')
-          .lean();
-      } else {
-        const users = await UserStore.findAllUsers();
-        const allLogs = [];
-        for (const u of users) {
-          const userLogs = await ActivityLogStore.findByUser(u._id, limit);
-          const mappedLogs = userLogs.map(l => ({
-            ...l,
-            userId: { _id: u._id, name: u.name }
-          }));
-          allLogs.push(...mappedLogs);
-        }
-        logs = allLogs
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-          .slice(0, limit);
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      count: logs.length,
-      data: logs
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { success: false, message: err.message || 'Server error occurred.' },
-      { status: 500 }
-    );
-  }
+    return NextResponse.json({ success: true, count: logs.length, data: logs });
+  } catch (error) { return NextResponse.json({ success: false, message: error.message }, { status: 500 }); }
 }
