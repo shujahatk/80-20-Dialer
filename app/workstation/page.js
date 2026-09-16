@@ -441,7 +441,6 @@ export default function Workstation() {
       return;
     }
 
-    setFetchingLead(true);
     setOutcomeError('');
     setNotes('');
     setOutcome('new');
@@ -449,39 +448,40 @@ export default function Workstation() {
     setMessageError('');
     setMessageSuccess('');
 
-    // Normalize and optimistically set selected lead
+    // Normalize and IMMEDIATELY set selected lead so interface opens instantly
     const normalized = normalizeLead(lead);
     setSelectedLead(normalized);
+    setFetchingLead(false);
+
+    const targetId = normalized._id || normalized.id;
+    if (!targetId) return;
 
     try {
-      const targetId = normalized._id || normalized.id;
-
-      // Attempt atomic 15-minute lead lock
-      const lockRes = await apiRequest('/api/leads/lock', 'POST', { leadId: targetId }).catch(err => ({ success: false, message: err.message, code: 'LEAD_LOCKED' }));
-      if (lockRes && !lockRes.success && lockRes.code === 'LEAD_LOCKED') {
+      // Attempt background lead lock silently without blocking interface
+      const lockRes = await apiRequest('/api/leads/lock', 'POST', { leadId: targetId }).catch(() => null);
+      if (lockRes && lockRes.success === false && lockRes.code === 'LEAD_LOCKED' && lockRes.status === 423) {
         alert(lockRes.message || 'Collision avoided: This lead is currently locked by another agent.');
         setSelectedLead(null);
-        setFetchingLead(false);
         return;
       }
 
-      const res = await apiRequest(`/api/leads/${targetId}`);
-      if (res.success && res.data) {
+      // Fetch full details and activity history in background
+      const res = await apiRequest(`/api/leads/${targetId}`).catch(() => null);
+      if (res && res.success && res.data) {
         const fullNormalized = normalizeLead(res.data);
         setSelectedLead(fullNormalized);
-
-        // Fetch timeline logs
-        const historyRes = await apiRequest(`/api/manager/activity?limit=50`).catch(() => null);
-        if (historyRes && historyRes.success) {
-          const leadLogs = (historyRes.data || []).filter(l => (l.leadId === targetId || l.lead_id === targetId));
-          setLeadHistory(leadLogs);
-        }
       }
+
+      apiRequest(`/api/manager/activity?limit=50`)
+        .then(historyRes => {
+          if (historyRes && historyRes.success) {
+            const leadLogs = (historyRes.data || []).filter(l => (l.leadId === targetId || l.lead_id === targetId));
+            setLeadHistory(leadLogs);
+          }
+        })
+        .catch(() => {});
     } catch (e) {
-      console.warn('Lead lock warning:', e.message);
-      // Keep optimistic selected lead active
-    } finally {
-      setFetchingLead(false);
+      console.warn('Lead selection background sync warning:', e.message);
     }
   }
 
