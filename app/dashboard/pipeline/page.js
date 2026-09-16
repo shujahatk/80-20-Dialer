@@ -143,11 +143,11 @@ export default function PipelineStatisticsPage() {
     if (!user) return;
     fetchPipeline();
 
-    // High-speed background heartbeat polling (every 4 seconds)
+    // Passive background fallback sync (every 60 seconds) - real-time events handle instant updates
     const heartbeatInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return; // Pause polling when tab is inactive
       fetchPipeline(true);
-    }, 4000);
+    }, 60000);
 
     function handleVisibilityOrOnline() {
       if (typeof document !== 'undefined' && !document.hidden) {

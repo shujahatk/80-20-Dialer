@@ -6,6 +6,7 @@ import { validatePhoneNumber } from '@/lib/phoneValidator';
 import { checkRateLimit } from '@/lib/rateLimiter';
 import { checkOperationalHours } from '@/lib/operationalHours';
 import { SuppressionStore } from '@/lib/suppression/suppressionStore';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus';
 
 export async function POST(req) {
   try {
@@ -27,17 +28,17 @@ export async function POST(req) {
       );
     }
 
-    if (!content || typeof content !== 'string' || content.trim() === '') {
+    const recipientPhone = validation.formattedPhone;
+    const smsContent = content ? content.trim() : '';
+
+    if (!smsContent) {
       return NextResponse.json(
         { success: false, message: 'Message body cannot be empty.' },
         { status: 400 }
       );
     }
 
-    const recipientPhone = validation.formattedPhone;
-    const smsContent = content.trim();
-
-    // 1. Permanent DNC Suppression Check
+    // 1. DNC Suppression Check
     const dncCheck = await SuppressionStore.isSuppressed({ phone: recipientPhone, channel: 'sms' });
     if (dncCheck.suppressed) {
       return NextResponse.json(
@@ -57,7 +58,7 @@ export async function POST(req) {
             { status: 403 }
           );
         }
-        if (lead.suppression?.sms || lead.suppression?.dnc || lead.coldOutreachStopped || lead.status === 'opted-out' || lead.status === 'dnc') {
+        if (lead.suppression?.phone || lead.suppression?.dnc || lead.coldOutreachStopped || lead.status === 'opted-out' || lead.status === 'dnc') {
           return NextResponse.json(
             { success: false, message: 'Lead is on DNC/suppression list.' },
             { status: 403 }
@@ -116,6 +117,15 @@ export async function POST(req) {
         messageSid: smsResult.messageSid
       });
     }
+
+    // Broadcast over Realtime Event Bus
+    broadcastRealtimeEvent('sms.sent', {
+      messageSid: smsResult.messageSid,
+      leadId: leadId || null,
+      userId: user._id,
+      to: recipientPhone,
+      channel: 'sms'
+    });
 
     return NextResponse.json({
       success: true,

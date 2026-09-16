@@ -2,34 +2,31 @@ import { NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { UserStore, LoginSessionStore } from '@/lib/store';
 import { generateToken } from '@/lib/auth';
-import { checkRateLimit } from '@/lib/rateLimiter';
 import { logAuditEvent } from '@/lib/auditLogger';
+import { parseAndSanitizeJson } from '@/lib/security/inputSanitizer';
+import { checkAuthRateLimit, recordFailedAuth, clearAuthRateLimit, extractClientIp } from '@/lib/middleware/rateLimiter';
 
 export async function POST(req) {
   try {
     await connectDB();
-    const body = await req.json();
-    const { email, password } = body;
+    
+    // Parse and sanitize payload with 1MB size limit
+    const parsed = await parseAndSanitizeJson(req, {
+      requiredFields: ['email', 'password']
+    });
+    if (!parsed.success) return parsed.errorResponse;
 
-    if (!email || !password) {
-      return NextResponse.json(
-        { success: false, message: 'Please enter both email and password.' },
-        { status: 400 }
-      );
-    }
-
-    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
+    const { email, password } = parsed.data;
+    const ip = extractClientIp(req);
     const emailKey = email.toLowerCase().trim();
-    const rateLimitKey = `${emailKey}_${ip}`;
 
-    // Brute-force protection: 5 failed attempts in 10 mins -> 15 min lockout
-    const { checkLoginRateLimit, recordFailedLogin, clearLoginRateLimit } = await import('@/lib/middleware/rateLimiter.js');
-    const rateCheck = checkLoginRateLimit(rateLimitKey);
+    // Brute-force protection: 5 attempts per 15 minutes
+    const rateCheck = checkAuthRateLimit(req, emailKey, 'login', 5);
     if (!rateCheck.allowed) return rateCheck.errorResponse;
 
     const user = await UserStore.findOne({ email: emailKey });
     if (!user) {
-      recordFailedLogin(rateLimitKey);
+      recordFailedAuth(req, emailKey, 'login');
       return NextResponse.json(
         { success: false, message: 'No account found with this email. Please register first.' },
         { status: 401 }
@@ -38,7 +35,7 @@ export async function POST(req) {
 
     const isMatch = await UserStore.matchPassword(password, user.password);
     if (!isMatch) {
-      recordFailedLogin(rateLimitKey);
+      recordFailedAuth(req, emailKey, 'login');
       await logAuditEvent({ userId: user._id, action: 'USER_LOGIN_FAILED', entityType: 'auth', notes: 'Incorrect password', req });
       return NextResponse.json(
         { success: false, message: 'Incorrect password. Access denied.' },
@@ -47,7 +44,7 @@ export async function POST(req) {
     }
 
     // Clear failed attempt history upon successful credentials validation
-    clearLoginRateLimit(rateLimitKey);
+    clearAuthRateLimit(req, emailKey, 'login');
 
     if (!user.approved || user.active === false) {
       return NextResponse.json(

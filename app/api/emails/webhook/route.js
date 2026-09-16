@@ -1,19 +1,21 @@
 import { NextResponse } from 'next/server';
 import { LeadStore, ActivityLogStore } from '@/lib/store';
 import { validateResendWebhook } from '@/lib/webhookValidator';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus';
 
 async function processEmailEvent(eventData) {
-  const { event, email, from, subject, text } = eventData;
-  const emailAddr = (email || from || '').toLowerCase().trim();
+  const { event, email, from, subject, text, data } = eventData;
+  const emailAddr = (email || from || data?.to?.[0] || '').toLowerCase().trim();
+  const eventType = event || data?.type || '';
 
   if (!emailAddr) return;
 
   // Handle DNC suppressions (bounce / unsubscribe)
-  if (event === 'bounce' || event === 'unsubscribe') {
+  if (eventType === 'bounce' || eventType === 'unsubscribe' || eventType === 'email.bounced') {
     const leads = await LeadStore.findPendingByEmail(emailAddr);
     if (leads.length > 0) {
       const lead = leads[0];
-      const reason = event === 'bounce' ? 'bounced' : 'unsubscribed';
+      const reason = (eventType.includes('bounce')) ? 'bounced' : 'unsubscribed';
       
       await LeadStore.update(lead._id, {
         suppression: { 
@@ -21,7 +23,7 @@ async function processEmailEvent(eventData) {
           email: true 
         },
         coldOutreachStopped: true,
-        status: event === 'bounce' ? 'not-interested' : 'opted-out',
+        status: reason === 'bounced' ? 'not-interested' : 'opted-out',
         'emailSequence.status': 'stopped',
         'emailSequence.stopReason': reason
       });
@@ -34,11 +36,17 @@ async function processEmailEvent(eventData) {
         direction: 'inbound',
         notes: `Outbound email sequence stopped. Lead email is ${reason}. Subject: ${subject || ''}`
       });
+
+      broadcastRealtimeEvent('email.bounced', {
+        email: emailAddr,
+        leadId: lead._id,
+        reason
+      });
     }
   }
 
   // Handle Inbound Replies
-  if (event === 'inbound-reply' || event === 'inbound') {
+  if (eventType === 'inbound-reply' || eventType === 'inbound' || eventType === 'email.replied') {
     const leads = await LeadStore.findPendingByEmail(emailAddr);
     if (leads.length > 0) {
       const lead = leads[0];
@@ -64,7 +72,38 @@ async function processEmailEvent(eventData) {
         outcome: 'inbound-reply',
         notes: `Reply received: ${subject || '(no subject)'}`
       });
+
+      broadcastRealtimeEvent('email.replied', {
+        email: emailAddr,
+        leadId: lead._id,
+        subject: subject || ''
+      });
     }
+  }
+
+  // Handle standard delivery events
+  if (eventType === 'email.delivered' || eventType === 'delivered') {
+    const emailId = eventData.id || data?.id;
+    let userId = null;
+    let leadId = null;
+
+    if (emailId) {
+      try {
+        const { MessageStore } = await import('@/lib/store');
+        const updatedMsg = await MessageStore.findOneAndUpdate({ messageSid: emailId }, { status: 'delivered' });
+        if (updatedMsg) {
+          userId = updatedMsg.userId;
+          leadId = updatedMsg.leadId;
+        }
+      } catch (e) {}
+    }
+
+    broadcastRealtimeEvent('email.delivered', {
+      email: emailAddr,
+      id: emailId,
+      userId,
+      leadId
+    });
   }
 }
 

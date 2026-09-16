@@ -34,25 +34,26 @@ export async function POST(req) {
     if (ErrorMessage) updateData.errorMessage = ErrorMessage;
 
     console.log(`[Twilio SMS Status Callback]: MessageSid: ${MessageSid}, Status: ${MessageStatus || 'unchanged'}`);
-    await MessageStore.findOneAndUpdate({ messageSid: MessageSid }, updateData);
+    const updatedMsg = await MessageStore.findOneAndUpdate({ messageSid: MessageSid }, updateData);
 
     if (MessageStatus === 'failed' || MessageStatus === 'undelivered') {
       const cleanedPhone = To ? To.replace('whatsapp:', '') : '';
-      const leads = await LeadStore.findPendingByPhone(cleanedPhone);
-      if (leads.length > 0) {
-        const lead = leads[0];
+      const leadId = updatedMsg?.leadId;
+      const userId = updatedMsg?.userId;
+
+      if (leadId) {
         const isWhatsapp = To && To.startsWith('whatsapp:');
         
         await ActivityLogStore.create({
-          leadId: lead._id,
-          userId: lead.userId || 'system',
+          leadId,
+          userId: userId || 'system',
           action: 'sms',
           channel: isWhatsapp ? 'whatsapp' : 'sms',
           direction: 'outbound',
           outcome: MessageStatus,
           notes: `${isWhatsapp ? 'WhatsApp' : 'SMS'} delivery failed: ${ErrorMessage || ErrorCode || 'unknown error'}`,
           messageSid: MessageSid
-        });
+        }).catch(() => {});
       }
     }
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { connectDB } from '@/lib/db';
 import { LeadStore, MessageStore, ActivityLogStore } from '@/lib/store';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus';
 
 export async function POST(req) {
   try {
@@ -42,10 +43,27 @@ export async function POST(req) {
       );
     }
 
-    // Respect suppression - if lead is opted out of email, skip
-    if (lead.suppression?.email) {
+    // Respect suppression - if lead or global suppression list has opted out of email, skip
+    if (lead.suppression?.email || lead.suppression?.dnc || lead.status === 'opted-out' || lead.coldOutreachStopped) {
       return NextResponse.json(
         { success: false, message: 'This lead has opted out of email communication.', isSuppressed: true },
+        { status: 403 }
+      );
+    }
+
+    const recipientEmail = lead.contact?.email || lead.email;
+    if (!recipientEmail) {
+      return NextResponse.json(
+        { success: false, message: 'This lead does not have a valid email address.' },
+        { status: 400 }
+      );
+    }
+
+    const { SuppressionStore } = await import('@/lib/suppression/suppressionStore.js');
+    const dncCheck = await SuppressionStore.isSuppressed({ email: recipientEmail, channel: 'email' });
+    if (dncCheck.suppressed) {
+      return NextResponse.json(
+        { success: false, message: 'Recipient is on the permanent DNC / suppression list.', isSuppressed: true },
         { status: 403 }
       );
     }
@@ -75,16 +93,14 @@ export async function POST(req) {
       );
     }
 
-    // Send email via Resend with RFC 8058 Compliance Headers
-    const recipientEmail = lead.contact?.email || lead.email;
-    if (!recipientEmail) {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
       return NextResponse.json(
-        { success: false, message: 'This lead does not have a valid email address.' },
-        { status: 400 }
+        { success: false, message: 'RESEND_API_KEY is not configured on the server. Email dispatch aborted.' },
+        { status: 500 }
       );
     }
 
-    const apiKey = process.env.RESEND_API_KEY;
     const defaultFrom = process.env.EMAIL_FROM || 'outreach@8020acquisition.com';
     const defaultFromName = process.env.EMAIL_FROM_NAME || '80/20 Acquisition';
     const configuredReplyTo = process.env.REPLY_TO || 'replies@8020acquisition.com';
@@ -103,39 +119,33 @@ export async function POST(req) {
     const complianceHeaders = getComplianceHeaders(recipientEmail);
     let sendResult = { success: false };
 
-    if (!apiKey) {
-      // Mock send - log to Message anyway
-      recordDomainSend(effectiveFromEmail, 1);
-      sendResult = { success: true, mock: true, id: `mock-email-${Date.now()}` };
-    } else {
-      try {
-        const from = `${effectiveFromName} <${effectiveFromEmail}>`;
-        const response = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            from: from,
-            to: [recipientEmail],
-            reply_to: replyTo,
-            subject: subject,
-            html: emailBody,
-            headers: complianceHeaders
-          }),
-        });
+    try {
+      const from = `${effectiveFromName} <${effectiveFromEmail}>`;
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: from,
+          to: [recipientEmail],
+          reply_to: replyTo,
+          subject: subject,
+          html: emailBody,
+          headers: complianceHeaders
+        }),
+      });
 
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.message || `Resend API returned status ${response.status}`);
-        }
-        recordDomainSend(effectiveFromEmail, 1);
-        sendResult = { success: true, id: data.id };
-      } catch (err) {
-        console.error('[Resend] Send error:', err.message);
-        sendResult = { success: false, error: err.message };
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || `Resend API returned status ${response.status}`);
       }
+      recordDomainSend(effectiveFromEmail, 1);
+      sendResult = { success: true, id: data.id };
+    } catch (err) {
+      console.error('[Resend] Send error:', err.message);
+      sendResult = { success: false, error: err.message };
     }
 
     // Log to Message model
@@ -180,6 +190,15 @@ export async function POST(req) {
       } catch (lmErr) {}
 
       console.log(`[Email] Successfully sent email to lead ${targetLeadId}: messageSid=${messageSid}`);
+
+      // Broadcast over Realtime Event Bus
+      broadcastRealtimeEvent('email.sent', {
+        messageSid,
+        leadId: targetLeadId,
+        userId: targetUserId,
+        to: recipientEmail,
+        subject
+      });
     } else {
       console.error(`[Email] Failed to send email to lead ${targetLeadId}: ${sendResult.error || 'Unknown error'}`);
 

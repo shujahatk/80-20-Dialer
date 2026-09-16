@@ -4,21 +4,23 @@ import { requireAuth } from '@/lib/middleware/authGuard.js';
 import { UserStore } from '@/lib/store.js';
 import { validatePasswordStrength } from '@/lib/auth/passwordValidator.js';
 import { logAuditEvent } from '@/lib/auditLogger.js';
+import { parseAndSanitizeJson } from '@/lib/security/inputSanitizer.js';
+import { checkAuthRateLimit, recordFailedAuth, clearAuthRateLimit } from '@/lib/middleware/rateLimiter.js';
 
 export async function POST(req) {
   try {
     const { user, errorResponse } = await requireAuth(req);
     if (errorResponse) return errorResponse;
 
-    const body = await req.json();
-    const { currentPassword, newPassword } = body;
+    const rate = checkAuthRateLimit(req, user._id || user.id, 'change_pw', 5);
+    if (!rate.allowed) return rate.errorResponse;
 
-    if (!currentPassword || !newPassword) {
-      return NextResponse.json(
-        { success: false, message: 'Both currentPassword and newPassword are required.' },
-        { status: 400 }
-      );
-    }
+    const parsed = await parseAndSanitizeJson(req, {
+      requiredFields: ['currentPassword', 'newPassword']
+    });
+    if (!parsed.success) return parsed.errorResponse;
+
+    const { currentPassword, newPassword } = parsed.data;
 
     // Retrieve fresh user record with stored password hash using multi-key lookup
     let fullUser = await UserStore.findByIdWithPassword(user._id || user.id);
@@ -51,6 +53,7 @@ export async function POST(req) {
     // Verify current password matches stored hash
     const isMatch = await bcrypt.compare(currentPassword, fullUser.password);
     if (!isMatch) {
+      recordFailedAuth(req, user._id || user.id, 'change_pw');
       return NextResponse.json(
         { success: false, message: 'Current password does not match.' },
         { status: 400 }
@@ -60,6 +63,7 @@ export async function POST(req) {
     // Validate new password strength
     const validation = validatePasswordStrength(newPassword);
     if (!validation.valid) {
+      recordFailedAuth(req, user._id || user.id, 'change_pw');
       return NextResponse.json(
         { success: false, message: validation.error },
         { status: 400 }
@@ -69,6 +73,7 @@ export async function POST(req) {
     // Prevent reusing the exact same password
     const isSameAsCurrent = await bcrypt.compare(newPassword, fullUser.password);
     if (isSameAsCurrent) {
+      recordFailedAuth(req, user._id || user.id, 'change_pw');
       return NextResponse.json(
         { success: false, message: 'New password must be different from current password.' },
         { status: 400 }
@@ -85,6 +90,8 @@ export async function POST(req) {
       tokenVersion: (fullUser.tokenVersion || 1) + 1,
       password_changed_at: new Date().toISOString()
     });
+
+    clearAuthRateLimit(req, user._id || user.id, 'change_pw');
 
     await logAuditEvent({
       userId: targetUserId,

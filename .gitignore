@@ -36,6 +36,7 @@
 
 # temporary scratch, logs & debugging artifacts
 /scratch/
+scratch*
 *.log
 *.log*
 npm-debug.log*

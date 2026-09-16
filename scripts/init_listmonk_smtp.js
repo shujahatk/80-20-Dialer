@@ -4,9 +4,14 @@
  */
 
 const LISTMONK_URL = process.env.LISTMONK_URL || 'http://localhost:9001';
-const LISTMONK_USER = process.env.LISTMONK_ADMIN_USER || 'admin';
-const LISTMONK_PASS = process.env.LISTMONK_ADMIN_PASS || 'admin_password_2026';
-const RESEND_API_KEY = process.env.RESEND_API_KEY || 're_default_api_key';
+const LISTMONK_USER = process.env.LISTMONK_ADMIN_USER;
+const LISTMONK_PASS = process.env.LISTMONK_ADMIN_PASS;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+
+if (!RESEND_API_KEY || !LISTMONK_USER || !LISTMONK_PASS) {
+  console.warn('⚠️ [Configuration Notice]: RESEND_API_KEY, LISTMONK_ADMIN_USER, and LISTMONK_ADMIN_PASS must be provided via environment variables.');
+  process.exit(0);
+}
 
 const authHeader = 'Basic ' + Buffer.from(`${LISTMONK_USER}:${LISTMONK_PASS}`).toString('base64');
 

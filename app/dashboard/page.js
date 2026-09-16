@@ -12,8 +12,9 @@ import MetricsKpiGrid from './components/MetricsKpiGrid';
 import OutboundActivityChart from './components/OutboundActivityChart';
 import ChannelDonutChart from './components/ChannelDonutChart';
 import AgentPresencePanel from './components/AgentPresencePanel';
+import LiveCallActivityFeed from './components/LiveCallActivityFeed';
 import BlastEngineSettingsCard from '@/components/BlastEngineSettingsCard';
-import { useRealtimePipeline } from '@/hooks/useRealtimePipeline';
+import { useRealtimeEventBus } from '@/hooks/useRealtimeEventBus';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -37,6 +38,8 @@ export default function Dashboard() {
   const [leads, setLeads] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [inboxes, setInboxes] = useState([]);
+  const [liveCalls, setLiveCalls] = useState([]);
+  const [recentActivity, setRecentActivity] = useState([]);
   const [settings, setSettings] = useState({
     callRecordingEnabled: false,
     allowedHoursStart: 8,
@@ -82,14 +85,203 @@ export default function Dashboard() {
     }
 
     fetchAllData();
-    // High-speed real-time background sync (every 2.5s) for live KPIs, calls, and agent presence
-    const interval = setInterval(fetchSilentData, 2500);
+    // Passive background sync fallback (every 60s) - Real-time updates handled instantly by Realtime Event Bus
+    const interval = setInterval(fetchSilentData, 60000);
     return () => clearInterval(interval);
   }, [router]);
 
-  // Real-time Pipeline and Multi-tab Broadcast Subscription (0ms instant sync)
-  useRealtimePipeline(() => {
-    fetchSilentData();
+  // Real-time Event Bus Subscription (0ms instant sync across all tabs & remote clients)
+  useRealtimeEventBus((event) => {
+    const { eventType, payload, timestamp } = event;
+    const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+    // 1. CALL EVENTS
+    if (eventType === 'call.started') {
+      const repName = payload?.userName || 'Sales Rep';
+      const leadName = payload?.leadName || payload?.leadPhone || 'Lead';
+      const callData = {
+        callSid: payload?.callSid || `call_${Date.now()}`,
+        leadId: payload?.leadId,
+        leadName: payload?.leadName,
+        leadPhone: payload?.leadPhone,
+        userId: payload?.userId,
+        userName: repName,
+        status: payload?.status || 'dialing',
+        startedAt: timestamp || new Date().toISOString()
+      };
+      setLiveCalls(prev => [callData, ...prev.filter(c => c.callSid !== callData.callSid)]);
+      setMetrics(prev => ({
+        ...prev,
+        callsToday: (prev.callsToday || 0) + 1
+      }));
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'call.started',
+          title: `${repName} → Called ${leadName}`,
+          detail: `Dialing...`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    } else if (eventType === 'call.ringing') {
+      setLiveCalls(prev => prev.map(c => (c.callSid === payload?.callSid || c.leadId === payload?.leadId) ? { ...c, status: 'ringing' } : c));
+    } else if (eventType === 'call.connected') {
+      const repName = payload?.userName || 'Sales Rep';
+      const leadName = payload?.leadName || payload?.leadPhone || 'Lead';
+      setLiveCalls(prev => prev.map(c => (c.callSid === payload?.callSid || c.leadId === payload?.leadId) ? { ...c, status: 'connected', answeredAt: timestamp || new Date().toISOString() } : c));
+      setMetrics(prev => {
+        const newConn = (prev.connectedCalls || 0) + 1;
+        const total = prev.callsToday || 1;
+        return {
+          ...prev,
+          connectedCalls: newConn,
+          connectionRate: `${((newConn / total) * 100).toFixed(1)}%`
+        };
+      });
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'call.connected',
+          title: `${repName} → Called ${leadName}`,
+          detail: `Connected • Live Audio Active`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    } else if (eventType === 'call.completed') {
+      setLiveCalls(prev => prev.filter(c => c.callSid !== payload?.callSid && c.leadId !== payload?.leadId));
+      const repName = payload?.userName || 'Sales Rep';
+      const leadName = payload?.leadName || payload?.leadPhone || 'Lead';
+      const durationSec = payload?.duration ? `${Math.floor(payload.duration / 60)}:${(payload.duration % 60).toString().padStart(2, '0')}` : 'Ended';
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'call.completed',
+          title: `${repName} → Called ${leadName}`,
+          detail: `Completed • ${durationSec}`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    }
+
+    // 2. SMS EVENTS
+    else if (eventType === 'sms.sent') {
+      const repName = payload?.user?.name || payload?.userName || 'Sales Rep';
+      setMetrics(prev => ({
+        ...prev,
+        smsSent: (prev.smsSent || 0) + 1
+      }));
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'sms.sent',
+          title: `${repName} → Sent SMS`,
+          detail: `To: ${payload?.to || 'Contact'} • Delivered`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    }
+
+    // 3. EMAIL EVENTS
+    else if (eventType === 'email.sent') {
+      const repName = payload?.user?.name || payload?.userName || 'Sales Rep';
+      setMetrics(prev => ({
+        ...prev,
+        emailsSent: (prev.emailsSent || 0) + 1
+      }));
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'email.sent',
+          title: `${repName} → Sent Email`,
+          detail: `To: ${payload?.to || 'Contact'} • Dispatched`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    } else if (eventType === 'email.delivered') {
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'email.delivered',
+          title: `Email Delivered`,
+          detail: `To: ${payload?.email || payload?.to || 'Contact'}`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    } else if (eventType === 'email.replied') {
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'email.replied',
+          title: `🔥 Inbound Reply Received!`,
+          detail: `From: ${payload?.email || payload?.from || 'Lead'}`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    }
+
+    // 4. LEAD & DISPOSITION EVENTS
+    else if (eventType === 'lead.stage_changed') {
+      const repName = payload?.updatedBy || 'Sales Rep';
+      const leadName = payload?.lead?.name || payload?.leadId || 'Contact';
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'lead.stage_changed',
+          title: `${repName} → Moved ${leadName}`,
+          detail: `${payload?.previousStage || 'Previous'} → ${payload?.stage || 'New Stage'}`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+      setLeads(prev => prev.map(l => (l._id === payload?.leadId || l.id === payload?.leadId) ? { ...l, stage: payload.stage } : l));
+    } else if (eventType === 'lead.disposition_changed') {
+      const repName = payload?.user?.name || 'Sales Rep';
+      const leadName = payload?.lead?.name || 'Contact';
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'lead.disposition',
+          title: `${repName} → Logged Disposition`,
+          detail: `${leadName} • ${payload?.outcome || 'Outcome'}`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    } else if (eventType === 'meeting.booked') {
+      const repName = payload?.user?.name || 'Sales Rep';
+      const leadName = payload?.lead?.name || 'Prospect';
+      setMetrics(prev => ({
+        ...prev,
+        meetingsBooked: (prev.meetingsBooked || 0) + 1
+      }));
+      setRecentActivity(prev => [
+        {
+          id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: 'meeting.booked',
+          title: `🎉 ${repName} → Booked Meeting!`,
+          detail: `Lead: ${leadName}`,
+          time: timeStr
+        },
+        ...prev.slice(0, 19)
+      ]);
+    } else if (eventType === 'user.heartbeat') {
+      if (payload?.user) {
+        setOnlineUsers(prev => {
+          const exists = prev.some(u => String(u._id || u.id) === String(payload.user.id));
+          if (!exists) {
+            return [...prev, { _id: payload.user.id, name: payload.user.name, email: payload.user.email, role: payload.user.role, isOnline: true }];
+          }
+          return prev;
+        });
+      }
+    }
   });
 
   async function fetchSilentData() {
@@ -334,7 +526,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Leaderboard, Live Presence & Infrastructure Monitor */}
+              {/* Leaderboard, Live Call Stream & Agent Presence */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Top Sales Agents Leaderboard */}
                 <div className="lg:col-span-2 bg-[#121624] border border-white/6 rounded-2xl p-5 space-y-4 shadow-lg shadow-black/20">
@@ -385,13 +577,14 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-              {/* Live Agent Presence Panel */}
-              <div className="lg:col-span-1">
-                <AgentPresencePanel onlineUsers={onlineUsers} leaderboard={teamLeaderboard} />
+                {/* Live Call Stream & Agent Presence Column */}
+                <div className="lg:col-span-1 space-y-6">
+                  <LiveCallActivityFeed liveCalls={liveCalls} recentActivity={recentActivity} />
+                  <AgentPresencePanel onlineUsers={onlineUsers} leaderboard={teamLeaderboard} />
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
           {/* TAB 3: TEAM ACCESS & APPROVALS */}
             <div className="bg-[#121624] border border-white/6 rounded-2xl p-6 space-y-4 shadow-lg shadow-black/20">

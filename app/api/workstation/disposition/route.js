@@ -3,6 +3,7 @@ import { requireAuth, canAccessResource } from '@/lib/middleware/authGuard.js';
 import { LeadStore, ActivityLogStore } from '@/lib/store.js';
 import { isSupabaseConfigured, getSupabaseClient } from '@/lib/supabase.js';
 import { handleStageChangeTrigger } from '@/lib/triggers/stageTriggers.js';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus.js';
 
 const ALLOWED_OUTCOMES = ['no_answer', 'voicemail', 'meeting_booked', 'not_interested'];
 
@@ -179,6 +180,40 @@ export async function POST(req) {
     try {
       handleStageChangeTrigger(updatedLead, oldStage, newStage).catch(console.error);
     } catch (e) {}
+
+    // Broadcast real-time events
+    try {
+      await broadcastRealtimeEvent('lead.disposition_changed', {
+        leadId,
+        outcome,
+        stage: newStage,
+        previousStage: oldStage,
+        notes: notes || '',
+        user: { id: uId, name: user.name || user.email },
+        lead: updatedLead
+      });
+
+      if (newStage !== oldStage) {
+        await broadcastRealtimeEvent('lead.stage_changed', {
+          leadId,
+          stage: newStage,
+          previousStage: oldStage,
+          lead: updatedLead,
+          updatedBy: user.name || user.email || 'User'
+        });
+      }
+
+      if (outcome === 'meeting_booked') {
+        await broadcastRealtimeEvent('meeting.booked', {
+          leadId,
+          user: { id: uId, name: user.name || user.email },
+          lead: updatedLead,
+          date: now.toISOString()
+        });
+      }
+    } catch (rtErr) {
+      console.warn('[Realtime broadcast error]:', rtErr.message);
+    }
 
     return NextResponse.json({
       success: true,

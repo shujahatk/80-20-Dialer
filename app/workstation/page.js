@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { apiRequest } from '@/lib/apiClient';
 import WorkstationBlastCenter from './components/WorkstationBlastCenter';
 import DispositionPanel from '@/components/workstation/DispositionPanel';
+import CallingModal from '@/components/calling/CallingModal';
 import { broadcastPipelineUpdate } from '@/hooks/useRealtimePipeline';
 
 // Normalization helper to handle leads with flat or nested schema
@@ -74,13 +75,81 @@ export default function Workstation() {
   const [fetchingLead, setFetchingLead] = useState(false);
   const [claimingLead, setClaimingLead] = useState(false);
 
-  // Softphone & Twilio State
-  const [deviceReady, setDeviceReady] = useState(true);
-  const [callStatus, setCallStatus] = useState('ready'); // ready, ringing, active, muted
+  // Softphone & Twilio Canonical State
+  const [deviceReady, setDeviceReady] = useState(false);
+  const [callState, setCallState] = useState('idle'); // idle, initializing, dialing, ringing, connected, reconnecting, ending, ended, busy, no_answer, failed, canceled
+  const [isCallingModalOpen, setIsCallingModalOpen] = useState(false);
+  const [callErrorMessage, setCallErrorMessage] = useState('');
   const [isMuted, setIsMuted] = useState(false);
   const [activeConnection, setActiveConnection] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [callSid, setCallSid] = useState('');
+
+  // Refs for instantaneous event handling
+  const activeConnectionRef = useRef(null);
+  const answeredAtRef = useRef(null);
+  const isCallEndingRef = useRef(false);
+  const callStateRef = useRef('idle');
+
+  // Keep ref in sync for SDK callbacks
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
+
+  // Monotonic State Transition Guard
+  const updateCallState = (nextState) => {
+    const current = callStateRef.current;
+    const terminalStates = ['ended', 'busy', 'no_answer', 'failed', 'canceled'];
+
+    // Prevent out-of-order events from reactivating terminal calls
+    if (terminalStates.includes(current) && !['idle', 'initializing', 'dialing'].includes(nextState)) {
+      console.log(`[Call State Guard]: Dropping transition from ${current} to ${nextState}`);
+      return;
+    }
+
+    console.log(`[Call State Machine]: ${current} -> ${nextState}`);
+    callStateRef.current = nextState;
+    setCallState(nextState);
+
+    if (nextState === 'connected') {
+      if (!answeredAtRef.current) {
+        answeredAtRef.current = Date.now();
+      }
+      setCallDuration(0);
+    }
+
+    if (terminalStates.includes(nextState)) {
+      let finalSecs = 0;
+      if (answeredAtRef.current) {
+        finalSecs = Math.max(0, Math.floor((Date.now() - answeredAtRef.current) / 1000));
+        setCallDuration(finalSecs);
+      }
+      if (finalSecs > 0) {
+        apiRequest('/api/session/dialing', 'POST', { seconds: finalSecs }).then(fetchStats).catch(() => {});
+      }
+      activeConnectionRef.current = null;
+      setActiveConnection(null);
+      setIsMuted(false);
+      isCallEndingRef.current = false;
+      fetchQueue();
+    }
+  };
+
+  // Accurate duration timer based on answeredAt timestamp
+  useEffect(() => {
+    let interval = null;
+    if (callState === 'connected') {
+      interval = setInterval(() => {
+        if (answeredAtRef.current) {
+          const elapsed = Math.max(0, Math.floor((Date.now() - answeredAtRef.current) / 1000));
+          setCallDuration(elapsed);
+        }
+      }, 500);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [callState]);
 
   // Dialer / Communications Forms
   const [activeChannel, setActiveChannel] = useState('sms'); // 'sms' | 'whatsapp' | 'email'
@@ -189,18 +258,6 @@ export default function Workstation() {
     };
   }, []);
 
-  // Sync timers
-  useEffect(() => {
-    if (callStatus === 'active') {
-      durationTimerRef.current = setInterval(() => {
-        setCallDuration(prev => prev + 1);
-      }, 1000);
-    } else {
-      if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-
-    }
-  }, [callStatus]);
-
   // Load Twilio SDK
   function loadTwilioScript() {
     return new Promise((resolve) => {
@@ -222,7 +279,7 @@ export default function Workstation() {
       const res = await apiRequest('/api/calls/token');
       if (!res.success || !res.token) {
         console.warn('Twilio client token not available, please configure Twilio WebRTC credentials.');
-        setCallStatus('ready');
+        setDeviceReady(false);
         return;
       }
 
@@ -237,47 +294,45 @@ export default function Workstation() {
         enableIceRestart: true,
         maxAverageBitrate: 16000
       });
+      deviceRef.current = device;
 
       device.on('ready', () => {
         console.log('[Twilio Device]: Ready to place and receive calls');
         setDeviceReady(true);
-        setCallStatus('ready');
       });
 
       device.on('registered', () => {
         console.log('[Twilio Device]: Registered successfully');
         setDeviceReady(true);
-        setCallStatus('ready');
       });
 
       device.on('connect', (conn) => {
         console.log('[Twilio Device]: Call connected');
+        activeConnectionRef.current = conn;
         setActiveConnection(conn);
-        setCallDuration(0);
-          setCallStatus('active');
         const twilioSid = conn?.parameters?.CallSid || conn?.customParameters?.get?.('CallSid') || '';
-        setCallSid(twilioSid);
+        if (twilioSid) setCallSid(twilioSid);
       });
 
       device.on('disconnect', () => {
         console.log('[Twilio Device]: Call disconnected');
-        if (callDuration > 0) {
-          apiRequest('/api/session/dialing', 'POST', { seconds: callDuration }).then(fetchStats).catch(() => {});
-        }
-        setActiveConnection(null);
-        setCallStatus('ready');
-        setIsMuted(false);
+        updateCallState('ended');
       });
 
       device.on('incoming', (conn) => {
         console.log('[Twilio Device]: Incoming call from', conn.parameters?.From);
+        activeConnectionRef.current = conn;
         setActiveConnection(conn);
-        setCallStatus('ringing');
-        // Auto-answer or notify rep
+        setIsCallingModalOpen(true);
+        updateCallState('ringing');
+
         if (window.confirm(`Incoming call from ${conn.parameters?.From || 'Unknown'}. Answer?`)) {
           conn.accept();
+          answeredAtRef.current = Date.now();
+          updateCallState('connected');
         } else {
           conn.reject();
+          updateCallState('ended');
         }
       });
 
@@ -290,13 +345,16 @@ export default function Workstation() {
           errorMsg = 'Twilio token expired. Re-authenticating...';
           initializeTwilioDevice();
         }
-        setCallStatus('ready');
+        setCallErrorMessage(errorMsg);
+        if (callStateRef.current !== 'idle' && callStateRef.current !== 'ended') {
+          updateCallState('failed');
+        }
       });
 
       deviceRef.current = device;
     } catch (e) {
       console.warn('Could not initialize Twilio device:', e.message);
-      setCallStatus('ready');
+      setDeviceReady(false);
     }
   }
 
@@ -455,7 +513,11 @@ export default function Workstation() {
       alert('No phone number available for this contact.');
       return;
     }
-    if (callStatus !== 'ready') return;
+
+    const current = callStateRef.current;
+    if (['initializing', 'dialing', 'ringing', 'connected', 'reconnecting', 'ending'].includes(current)) {
+      return; // Prevent double dial
+    }
 
     // Verify microphone permission before placing call
     if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -467,10 +529,17 @@ export default function Workstation() {
       }
     }
 
-    setCallStatus('ringing');
+    setCallErrorMessage('');
+    answeredAtRef.current = null;
+    isCallEndingRef.current = false;
+    setIsCallingModalOpen(true);
+    updateCallState('initializing');
+
     try {
       if (deviceRef.current) {
         const targetLeadId = selectedLead._id || selectedLead.id;
+        updateCallState('dialing');
+
         const conn = await deviceRef.current.connect({
           params: {
             To: targetPhone,
@@ -478,70 +547,107 @@ export default function Workstation() {
           },
           To: targetPhone
         });
+
+        activeConnectionRef.current = conn;
         setActiveConnection(conn);
+
         if (conn.on) {
+          conn.on('ringing', () => {
+            updateCallState('ringing');
+          });
           conn.on('accept', () => {
+            answeredAtRef.current = Date.now();
             setCallDuration(0);
-          setCallStatus('active');
+            updateCallState('connected');
             const sid = conn?.parameters?.CallSid || conn?.customParameters?.get?.('CallSid') || '';
-            setCallSid(sid);
+            if (sid) setCallSid(sid);
           });
           conn.on('disconnect', () => {
-            setCallStatus('ready');
-            setActiveConnection(null);
+            updateCallState('ended');
           });
           conn.on('reject', () => {
-            alert('Call rejected by recipient or carrier.');
-            setCallStatus('ready');
-            setActiveConnection(null);
+            updateCallState('no_answer');
+          });
+          conn.on('cancel', () => {
+            updateCallState('canceled');
           });
           conn.on('error', (err) => {
-            alert(`Call error: ${err.message || 'Call failed.'}`);
-            setCallStatus('ready');
-            setActiveConnection(null);
+            setCallErrorMessage(err.message || 'Call failed.');
+            updateCallState('failed');
+          });
+          conn.on('reconnecting', () => {
+            updateCallState('reconnecting');
+          });
+          conn.on('reconnected', () => {
+            updateCallState('connected');
           });
         }
       } else {
+        updateCallState('dialing');
         const res = await apiRequest('/api/calls', 'POST', {
           to: targetPhone,
           leadId: selectedLead._id || selectedLead.id
         });
         if (res.success && res.data) {
           setCallSid(res.data.callSid);
-          setCallDuration(0);
-          setCallStatus('active');
+          updateCallState('ringing');
         } else {
           throw new Error(res.message || 'Outbound call failed.');
         }
       }
     } catch (e) {
-      alert(e.message || 'Outbound call failed. Please verify Allowed Calling Hours in Admin Settings.');
-      setCallStatus('ready');
+      console.error('[Outbound Call Exception]:', e);
+      setCallErrorMessage(e.message || 'Outbound call failed. Please verify Allowed Calling Hours in Admin Settings.');
+      updateCallState('failed');
     }
   }
 
   function endCall() {
-    if (deviceRef.current) {
-      deviceRef.current.disconnectAll();
-    } else {
-      if (callDuration > 0) {
-        apiRequest('/api/session/dialing', 'POST', { seconds: callDuration }).then(fetchStats);
+    if (isCallEndingRef.current) return;
+    isCallEndingRef.current = true;
+    updateCallState('ending');
+
+    const activeSid = callSid || activeConnectionRef.current?.parameters?.CallSid || activeConnectionRef.current?.customParameters?.get?.('CallSid');
+
+    if (activeConnectionRef.current) {
+      try {
+        activeConnectionRef.current.disconnect();
+      } catch (e) {
+        console.warn('activeConnection.disconnect error:', e);
       }
-      setCallStatus('ready');
-      setIsMuted(false);
     }
+
+    if (deviceRef.current) {
+      try {
+        deviceRef.current.disconnectAll();
+      } catch (e) {
+        console.warn('device.disconnectAll error:', e);
+      }
+    }
+
+    if (activeSid) {
+      apiRequest('/api/calls/terminate', 'POST', {
+        callSid: activeSid,
+        leadId: selectedLead?._id || selectedLead?.id
+      }).catch(err => console.warn('[Call termination API notice]:', err.message));
+    }
+
+    setTimeout(() => {
+      updateCallState('ended');
+    }, 400);
   }
 
   function toggleMute() {
-    if (activeConnection) {
-      const nextMute = !isMuted;
-      activeConnection.mute(nextMute);
-      setIsMuted(nextMute);
-      setCallStatus(nextMute ? 'muted' : 'active');
-    } else {
-      const nextMute = !isMuted;
-      setIsMuted(nextMute);
-      setCallStatus(nextMute ? 'muted' : 'active');
+    const nextMute = !isMuted;
+    setIsMuted(nextMute);
+    if (activeConnectionRef.current && activeConnectionRef.current.mute) {
+      activeConnectionRef.current.mute(nextMute);
+    }
+  }
+
+  function handleSendDigits(digit) {
+    if (activeConnectionRef.current && activeConnectionRef.current.sendDigits) {
+      activeConnectionRef.current.sendDigits(digit);
     }
   }
 
@@ -976,30 +1082,36 @@ export default function Workstation() {
         {/* Softphone Banner */}
         <div className="hidden md:flex items-center gap-3 bg-white/5 border border-white/8 rounded-xl px-4 py-2">
           <span className={`w-2 h-2 rounded-full shrink-0 ${
-            callStatus === 'active' || callStatus === 'muted' ? 'bg-emerald-400 shadow-lg shadow-emerald-500/40 animate-pulse' :
-            callStatus === 'ready' ? 'bg-cyan-400 shadow-lg shadow-cyan-500/30' :
-            callStatus === 'ringing' ? 'bg-amber-400 animate-pulse' :
-            'bg-red-500'
+            callState === 'connected' ? (isMuted ? 'bg-amber-400' : 'bg-emerald-400 shadow-lg shadow-emerald-500/40 animate-pulse') :
+            callState === 'ringing' ? 'bg-amber-400 animate-pulse' :
+            callState === 'dialing' || callState === 'initializing' ? 'bg-cyan-400 animate-ping' :
+            deviceReady || callState === 'idle' || callState === 'ended' ? 'bg-cyan-400 shadow-lg shadow-cyan-500/30' :
+            'bg-slate-500'
           }`} />
           <span className="text-xs font-semibold text-slate-300">
-            {callStatus === 'active' ? `In Call â€” ${formatTime(callDuration)}` :
-             callStatus === 'muted' ? `Muted â€” ${formatTime(callDuration)}` :
-             callStatus === 'ringing' ? 'Ringing...' :
-             callStatus === 'ready' ? 'Softphone Ready' : 'Softphone Offline'}
+            {callState === 'connected' ? (isMuted ? `Muted — ${formatTime(callDuration)}` : `In Call — ${formatTime(callDuration)}`) :
+             callState === 'ringing' ? 'Ringing...' :
+             callState === 'dialing' || callState === 'initializing' ? 'Calling...' :
+             callState === 'ending' ? 'Ending...' :
+             callState === 'reconnecting' ? 'Reconnecting...' :
+             deviceReady ? 'Softphone Ready' : 'Softphone Standby'}
           </span>
 
-          {(callStatus === 'active' || callStatus === 'muted') && (
+          {(callState === 'connected' || callState === 'ringing' || callState === 'dialing') && (
             <div className="flex items-center gap-2 border-l border-white/10 pl-3">
-              <button onClick={toggleMute} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${isMuted ? 'bg-red-500/20 text-red-400' : 'hover:bg-white/5 text-slate-400'}`}>
-                {isMuted ? (
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zM17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" /></svg>
-                ) : (
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
-                )}
-                {isMuted ? 'Unmute' : 'Mute'}
+              <button 
+                onClick={() => setIsCallingModalOpen(true)}
+                className="px-2.5 py-1 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 rounded-lg text-xs font-bold transition-all"
+                title="Open softphone view"
+              >
+                View Call
               </button>
+              {callState === 'connected' && (
+                <button onClick={toggleMute} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${isMuted ? 'bg-red-500/20 text-red-400' : 'hover:bg-white/5 text-slate-400'}`}>
+                  {isMuted ? 'Unmute' : 'Mute'}
+                </button>
+              )}
               <button onClick={endCall} className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-3 py-1 rounded-lg shadow-md shadow-red-500/20 transition-all duration-200">
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a16.003 16.003 0 0114 0" /></svg>
                 End Call
               </button>
             </div>
@@ -1245,7 +1357,8 @@ export default function Workstation() {
                       </span>
                     )}
 
-                    {callStatus === 'ready' && (
+                    {/* Dial button when idle / ended / terminal */}
+                    {['idle', 'ended', 'busy', 'no_answer', 'failed', 'canceled'].includes(callState) && (
                       <button
                         onClick={startCall}
                         disabled={selectedLead.outOfHours}
@@ -1257,12 +1370,15 @@ export default function Workstation() {
                       </button>
                     )}
 
-                    {callStatus === 'ringing' && (
+                    {(callState === 'dialing' || callState === 'initializing' || callState === 'ringing') && (
                       <div className="flex items-center gap-2">
-                        <span className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 animate-pulse">
+                        <button
+                          onClick={() => setIsCallingModalOpen(true)}
+                          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 animate-pulse hover:bg-cyan-500/30 cursor-pointer"
+                        >
                           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
-                          Ringing...
-                        </span>
+                          {callState === 'ringing' ? 'Ringing...' : 'Calling...'}
+                        </button>
                         <button
                           onClick={endCall}
                           className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 text-xs font-bold rounded-xl cursor-pointer"
@@ -1272,12 +1388,15 @@ export default function Workstation() {
                       </div>
                     )}
 
-                    {(callStatus === 'active' || callStatus === 'muted') && (
+                    {(callState === 'connected' || callState === 'reconnecting' || callState === 'ending') && (
                       <div className="flex items-center gap-2">
-                        <span className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm shadow-emerald-500/20">
+                        <button
+                          onClick={() => setIsCallingModalOpen(true)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm shadow-emerald-500/20 hover:bg-emerald-500/30 cursor-pointer"
+                        >
                           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                           In Call ({formatTime(callDuration)})
-                        </span>
+                        </button>
                         <button
                           onClick={toggleMute}
                           className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
@@ -2063,6 +2182,27 @@ export default function Workstation() {
           </div>
         </div>
       )}
+
+      {/* Dedicated Softphone Calling Modal */}
+      <CallingModal
+        isOpen={isCallingModalOpen}
+        lead={selectedLead}
+        callState={callState}
+        duration={callDuration}
+        isMuted={isMuted}
+        errorMessage={callErrorMessage}
+        onToggleMute={toggleMute}
+        onSendDigits={handleSendDigits}
+        onEndCall={endCall}
+        onClose={() => setIsCallingModalOpen(false)}
+        onOpenDisposition={() => {
+          setIsCallingModalOpen(false);
+          const outcomeSection = document.getElementById('log-outcome-section');
+          if (outcomeSection) {
+            outcomeSection.scrollIntoView({ behavior: 'smooth' });
+          }
+        }}
+      />
 
     </div>
   );

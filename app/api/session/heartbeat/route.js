@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { LoginSessionStore, UserStore } from '@/lib/store';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus';
 
 export async function POST(req) {
   try {
@@ -34,6 +35,15 @@ export async function POST(req) {
     });
 
     await UserStore.updateLastActive(user._id);
+
+    // Broadcast user presence heartbeat
+    broadcastRealtimeEvent('user.heartbeat', {
+      userId: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      isOnBreak: !!updated.isOnBreak
+    });
 
     return NextResponse.json({
       success: true,

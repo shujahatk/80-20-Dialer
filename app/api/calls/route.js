@@ -5,6 +5,7 @@ import { makeOutboundCall } from '@/lib/twilioService';
 import { validatePhoneNumber } from '@/lib/phoneValidator';
 import { checkOperationalHours } from '@/lib/operationalHours';
 import { SuppressionStore } from '@/lib/suppression/suppressionStore';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus';
 
 export async function POST(req) {
   try {
@@ -84,6 +85,16 @@ export async function POST(req) {
       status: callResult.status,
       direction: 'outbound',
       startTime: new Date()
+    });
+
+    // Broadcast live call started event
+    broadcastRealtimeEvent('call.started', {
+      callSid: callResult.callSid,
+      leadId: leadId || null,
+      userId: user._id,
+      userName: user.name || user.email || 'Sales Rep',
+      to: recipientPhone,
+      status: 'dialing'
     });
 
     return NextResponse.json({

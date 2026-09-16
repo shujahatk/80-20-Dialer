@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuth, canAccessResource, normalizeRole, ROLES } from '@/lib/middleware/authGuard';
 import { LeadStore, ActivityLogStore } from '@/lib/store';
 import { PIPELINE_STAGES, VALID_STAGE_IDS, normalizePipelineStage } from '@/lib/pipelineConfig';
+import { broadcastRealtimeEvent } from '@/lib/realtime/eventBus.js';
 
 export async function PATCH(req) {
   try {
@@ -97,6 +98,24 @@ export async function PATCH(req) {
       handleStageChangeTrigger(updatedLead, oldStage, canonicalStage).catch(console.error);
     } catch (triggerErr) {
       console.warn('Stage trigger warning:', triggerErr);
+    }
+
+    // Broadcast real-time event
+    try {
+      await broadcastRealtimeEvent('lead.stage_changed', {
+        leadId,
+        stage: canonicalStage,
+        previousStage: oldStage,
+        lead: updatedLead,
+        updatedBy: user.name || user.email || 'User'
+      });
+      await broadcastRealtimeEvent('lead.updated', {
+        leadId,
+        changes: { stage: canonicalStage },
+        lead: updatedLead
+      });
+    } catch (rtErr) {
+      console.warn('[Realtime broadcast error]:', rtErr.message);
     }
 
     return NextResponse.json({

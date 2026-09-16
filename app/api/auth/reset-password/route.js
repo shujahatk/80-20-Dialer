@@ -3,22 +3,25 @@ import bcrypt from 'bcryptjs';
 import { UserStore } from '@/lib/store.js';
 import { validatePasswordStrength } from '@/lib/auth/passwordValidator.js';
 import { logAuditEvent } from '@/lib/auditLogger.js';
+import { parseAndSanitizeJson } from '@/lib/security/inputSanitizer.js';
+import { checkAuthRateLimit, recordFailedAuth, clearAuthRateLimit } from '@/lib/middleware/rateLimiter.js';
 
 export async function POST(req) {
   try {
-    const body = await req.json();
-    const { token, newPassword } = body;
+    const rate = checkAuthRateLimit(req, '', 'reset_pw', 5);
+    if (!rate.allowed) return rate.errorResponse;
 
-    if (!token || !newPassword) {
-      return NextResponse.json(
-        { success: false, message: 'Reset token and newPassword are required.' },
-        { status: 400 }
-      );
-    }
+    const parsed = await parseAndSanitizeJson(req, {
+      requiredFields: ['token', 'newPassword']
+    });
+    if (!parsed.success) return parsed.errorResponse;
+
+    const { token, newPassword } = parsed.data;
 
     // Validate new password strength
     const validation = validatePasswordStrength(newPassword);
     if (!validation.valid) {
+      recordFailedAuth(req, '', 'reset_pw');
       return NextResponse.json(
         { success: false, message: validation.error },
         { status: 400 }
@@ -29,6 +32,7 @@ export async function POST(req) {
     const user = await UserStore.findByResetToken(token);
 
     if (!user) {
+      recordFailedAuth(req, '', 'reset_pw');
       return NextResponse.json(
         { success: false, message: 'Invalid or expired password reset token.' },
         { status: 400 }
@@ -39,6 +43,7 @@ export async function POST(req) {
     const now = Date.now();
     const expiresAt = new Date(user.reset_password_expires_at || 0).getTime();
     if (!user.reset_password_expires_at || !Number.isFinite(expiresAt) || now >= expiresAt) {
+      recordFailedAuth(req, '', 'reset_pw');
       return NextResponse.json(
         { success: false, message: 'Password reset token has expired. Please request a new one.' },
         { status: 400 }
@@ -56,6 +61,8 @@ export async function POST(req) {
       reset_password_expires_at: null,
       password_changed_at: new Date().toISOString()
     });
+
+    clearAuthRateLimit(req, '', 'reset_pw');
 
     await logAuditEvent({
       userId: user._id || user.id,
