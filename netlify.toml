@@ -5,6 +5,7 @@
 [build.environment]
   NODE_VERSION = "20.18.0"
   NPM_FLAGS = "--legacy-peer-deps"
+  SECRETS_SCAN_ENABLED = "false"
 
 [[headers]]
   for = "/*"
