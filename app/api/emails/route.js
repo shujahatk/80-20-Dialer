@@ -121,7 +121,7 @@ export async function POST(req) {
 
     try {
       const from = `${effectiveFromName} <${effectiveFromEmail}>`;
-      const response = await fetch('https://api.resend.com/emails', {
+      let response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -137,11 +137,32 @@ export async function POST(req) {
         }),
       });
 
-      const data = await response.json();
+      let data = await response.json();
+      if (!response.ok && data?.message && (data.message.includes('is not verified') || data.message.includes('verify your domain'))) {
+        console.warn(`[Resend Notice]: Domain ${candidateDomain} not verified yet. Retrying via onboarding@resend.dev sandbox...`);
+        const fallbackFrom = `${effectiveFromName} <onboarding@resend.dev>`;
+        response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: fallbackFrom,
+            to: [recipientEmail],
+            reply_to: replyTo,
+            subject: subject,
+            html: emailBody,
+            headers: complianceHeaders
+          }),
+        });
+        data = await response.json();
+      }
+
       if (!response.ok) {
         throw new Error(data.message || `Resend API returned status ${response.status}`);
       }
-      recordDomainSend(effectiveFromEmail, 1);
+      recordDomainSend('resend.dev', 1);
       sendResult = { success: true, id: data.id };
     } catch (err) {
       console.error('[Resend] Send error:', err.message);
