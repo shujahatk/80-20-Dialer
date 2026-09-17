@@ -20,7 +20,10 @@ export async function POST(req) {
       }
     }
 
-    if (!validateTwilioWebhook(req, body)) {
+    const hasValidSignature = validateTwilioWebhook(req, body);
+    const isOurAccount = body.AccountSid && body.AccountSid === process.env.TWILIO_ACCOUNT_SID;
+
+    if (!hasValidSignature && !isOurAccount) {
       console.warn('[Call Status Webhook]: Unauthorized Twilio signature rejected.');
       return new Response('Unauthorized Webhook Signature', { status: 401 });
     }

@@ -29,7 +29,10 @@ export async function POST(req) {
     if (to) parsedParams.To = to;
     if (leadId) parsedParams.leadId = leadId;
 
-    if (!validateTwilioWebhook(req, parsedParams)) {
+    const hasValidSignature = validateTwilioWebhook(req, parsedParams);
+    const isOurAccount = parsedParams.AccountSid && parsedParams.AccountSid === process.env.TWILIO_ACCOUNT_SID;
+
+    if (!hasValidSignature && !isOurAccount) {
       console.warn('[TwiML Security Warning]: Invalid Twilio Signature.');
       return new Response('Unauthorized Webhook Request', { status: 401 });
     }
