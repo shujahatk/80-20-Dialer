@@ -283,18 +283,45 @@ export default function Workstation() {
         return;
       }
 
-      if (!window.Twilio || !window.Twilio.Device) {
+      let DeviceClass = null;
+      try {
+        const voiceSdk = await import('@twilio/voice-sdk');
+        DeviceClass = voiceSdk.Device || voiceSdk.default?.Device || voiceSdk.default;
+      } catch (e) {
+        console.warn('Dynamic import of @twilio/voice-sdk failed, checking window.Twilio:', e.message);
+      }
+
+      if (!DeviceClass && typeof window !== 'undefined' && window.Twilio?.Device) {
+        DeviceClass = window.Twilio.Device;
+      }
+
+      if (!DeviceClass) {
+        await loadTwilioScript();
+        if (typeof window !== 'undefined' && window.Twilio?.Device) {
+          DeviceClass = window.Twilio.Device;
+        }
+      }
+
+      if (!DeviceClass) {
         console.warn('Twilio Voice SDK not loaded yet.');
         return;
       }
 
-      const device = new window.Twilio.Device(res.token, {
+      if (deviceRef.current) {
+        try { deviceRef.current.destroy(); } catch (e) {}
+      }
+
+      const device = new DeviceClass(res.token, {
         codecPreferences: ['opus', 'pcmu'],
         fakeLocalAudioSink: true,
         enableIceRestart: true,
         maxAverageBitrate: 16000
       });
       deviceRef.current = device;
+
+      if (typeof device.register === 'function') {
+        device.register().catch(e => console.warn('Device registration notice:', e.message));
+      }
 
       device.on('ready', () => {
         console.log('[Twilio Device]: Ready to place and receive calls');
@@ -350,10 +377,8 @@ export default function Workstation() {
           updateCallState('failed');
         }
       });
-
-      deviceRef.current = device;
-    } catch (e) {
-      console.warn('Could not initialize Twilio device:', e.message);
+    } catch (err) {
+      console.error('[Twilio Device Initialization Failed]:', err);
       setDeviceReady(false);
     }
   }
@@ -583,21 +608,16 @@ export default function Workstation() {
           });
         }
       } else {
-        updateCallState('dialing');
-        const res = await apiRequest('/api/calls', 'POST', {
-          to: targetPhone,
-          leadId: selectedLead._id || selectedLead.id
-        });
-        if (res.success && res.data) {
-          setCallSid(res.data.callSid);
-          updateCallState('ringing');
+        await initializeTwilioDevice();
+        if (deviceRef.current) {
+          return startCall();
         } else {
-          throw new Error(res.message || 'Outbound call failed.');
+          throw new Error('Twilio Voice softphone is not ready. Please verify your Twilio credentials in environment variables.');
         }
       }
     } catch (e) {
       console.error('[Outbound Call Exception]:', e);
-      setCallErrorMessage(e.message || 'Outbound call failed. Please verify Allowed Calling Hours in Admin Settings.');
+      setCallErrorMessage(e.message || 'Outbound call failed. Please verify Twilio settings.');
       updateCallState('failed');
     }
   }
