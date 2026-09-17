@@ -101,16 +101,18 @@ export async function POST(req) {
       );
     }
 
-    const defaultFrom = process.env.EMAIL_FROM || 'outreach@8020acquisition.com';
+    const defaultFrom = process.env.EMAIL_FROM || 'outreach@8020aquisition.com';
     const defaultFromName = process.env.EMAIL_FROM_NAME || '80/20 Acquisition';
-    const configuredReplyTo = process.env.REPLY_TO || 'replies@8020acquisition.com';
+    const configuredReplyTo = process.env.REPLY_TO || 'abdullah@8020aquisition.com';
 
-    // Check custom salesperson sending address (e.g. sammar@8020acquisition.com)
-    const allowedDomains = ['8020acquisition.com', '8020aquisition.com', 'resend.dev'];
-    const senderCandidate = fromEmail || user?.email || (user?.name ? `${user.name.toLowerCase()}@8020acquisition.com` : defaultFrom);
+    // Check custom salesperson sending address and map to verified Resend domain
+    const allowedDomains = ['8020aquisition.com', '8020acquisition.com', 'resend.dev'];
+    let senderCandidate = fromEmail || user?.email || (user?.name ? `${user.name.toLowerCase()}@8020aquisition.com` : defaultFrom);
+    if (senderCandidate.includes('@8020acquisition.com')) {
+      senderCandidate = senderCandidate.replace('@8020acquisition.com', '@8020aquisition.com');
+    }
     const candidateDomain = senderCandidate.includes('@') ? senderCandidate.split('@')[1].toLowerCase() : '';
-    const isCustomVerifiedDomain = allowedDomains.some(d => candidateDomain === d || candidateDomain.endsWith(`.${d}`)) ||
-      (defaultFrom.includes('@') && candidateDomain === defaultFrom.split('@')[1].toLowerCase());
+    const isCustomVerifiedDomain = allowedDomains.some(d => candidateDomain === d || candidateDomain.endsWith(`.${d}`));
     
     const effectiveFromEmail = isCustomVerifiedDomain ? senderCandidate.trim().toLowerCase() : defaultFrom;
     const effectiveFromName = fromName ? fromName.trim() : (user?.name ? user.name.trim() : defaultFromName);
@@ -138,9 +140,9 @@ export async function POST(req) {
       });
 
       let data = await response.json();
-      if (!response.ok && data?.message && (data.message.includes('is not verified') || data.message.includes('verify your domain'))) {
-        console.warn(`[Resend Notice]: Domain ${candidateDomain} not verified yet. Retrying via onboarding@resend.dev sandbox...`);
-        const fallbackFrom = `${effectiveFromName} <onboarding@resend.dev>`;
+      if (!response.ok && data?.message && (data.message.includes('is not verified') || data.message.includes('verify your domain')) && effectiveFromEmail !== defaultFrom) {
+        console.warn(`[Resend Notice]: Sender ${effectiveFromEmail} not verified yet. Retrying via default verified sender ${defaultFrom}...`);
+        const fallbackFrom = `${effectiveFromName} <${defaultFrom}>`;
         response = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
